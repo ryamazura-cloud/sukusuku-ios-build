@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "family-share",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-25",
+  "workers_dev": false,
+  "preview_urls": false,
+  "env": {
+    "dev": {
+      "name": "family-share-dev",
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {"APP_ENV":"dev","FIREBASE_PROJECT_ID":"photoshare-e1336"},
+      "r2_buckets": [{"binding":"MEDIA","bucket_name":"family-share-dev"}]
+    },
+    "prod": {
+      "name": "family-share-prod",
+      "workers_dev": false,
+      "preview_urls": false,
+      "vars": {"APP_ENV":"prod","FIREBASE_PROJECT_ID":"REPLACE_PROD_PROJECT"},
+      "r2_buckets": [{"binding":"MEDIA","bucket_name":"family-share-prod"}]
+    }
+  }
+}
