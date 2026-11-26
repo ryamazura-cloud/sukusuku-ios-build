@@ -62,7 +62,7 @@ jobs:
           printf '%s' "$BUILD_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/family-distribution.p12"
           printf '%s' "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/family.mobileprovision"
           security cms -D -i "$RUNNER_TEMP/family.mobileprovision" > "$RUNNER_TEMP/family-profile.plist"
-          python3 - <<'PY'
+          PROFILE_UUID=$(python3 - <<'PY'
           import json, os, pathlib, plistlib, shutil
           from urllib.parse import urlsplit
 
@@ -100,9 +100,9 @@ jobs:
               "manageAppVersionAndBuildNumber": False,
           }
           (temp / "family-export.plist").write_bytes(plistlib.dumps(export))
-          with open(os.environ["GITHUB_ENV"], "a") as env:
-              env.write("PROFILE_UUID=" + profile["UUID"] + "\n")
+          print(profile["UUID"])
           PY
+          )
           keychain="$RUNNER_TEMP/family-signing.keychain-db"
           password=$(openssl rand -hex 32)
           echo "::add-mask::$password"
@@ -112,7 +112,7 @@ jobs:
           security import "$RUNNER_TEMP/family-distribution.p12" -P "$P12_PASSWORD" -t cert -f pkcs12 -k "$keychain" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
           security list-keychains -d user -s "$keychain"
-          ruby - <<'RUBY'
+          PROFILE_UUID="$PROFILE_UUID" ruby - <<'RUBY'
           require 'xcodeproj'
           project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
           runner = project.targets.find { |target| target.name == 'Runner' }
