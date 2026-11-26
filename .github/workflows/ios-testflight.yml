@@ -6,6 +6,14 @@ on:
         description: App Store Connect build number (increase for every upload)
         required: true
         default: '2'
+      runner:
+        description: macOS runner for TestFlight
+        type: choice
+        required: true
+        default: macos-26-intel
+        options:
+          - macos-26-intel
+          - macos-26
 permissions:
   contents: read
 concurrency:
@@ -14,7 +22,7 @@ concurrency:
 jobs:
   testflight:
     if: github.ref_name == github.event.repository.default_branch
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 45
     environment: ios-testflight-dev
     defaults:
