@@ -137,8 +137,16 @@ jobs:
           unzip -q "${ipas[0]}" -d "$RUNNER_TEMP/family-verify"
           bundles=("$RUNNER_TEMP"/family-verify/Payload/*.app)
           [[ "${#bundles[@]}" -eq 1 ]]
-          codesign -d --entitlements - "${bundles[0]}" > "$RUNNER_TEMP/family-entitlements.plist"
-          [[ "$(plutil -extract aps-environment raw -o - "$RUNNER_TEMP/family-entitlements.plist")" == production ]]
+          entitlements="$RUNNER_TEMP/family-entitlements.plist"
+          codesign --display --entitlements - --xml "${bundles[0]}" > "$entitlements"
+          if ! aps_environment=$(plutil -extract aps-environment raw -o - "$entitlements"); then
+            echo "::error::Unable to read aps-environment from the signed app"
+            exit 1
+          fi
+          if [[ "$aps_environment" != production ]]; then
+            echo "::error::The signed app must have the production APNs entitlement"
+            exit 1
+          fi
       - name: Upload to App Store Connect
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
