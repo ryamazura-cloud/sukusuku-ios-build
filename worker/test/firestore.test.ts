@@ -95,8 +95,8 @@ test('creates a family and grants only the invited role once', async () => {
 
   const otherParent = await store.createInvite('owner', family.id, 'parent')
   await assert.rejects(store.joinFamily('viewer', otherParent.code), { status: 409 })
-  assert.deepEqual(await store.joinFamily('parent', otherParent.code), { ...family, role: 'parent' })
-  await assert.rejects(store.createInvite('parent', family.id, 'maternal'), { status: 403 })
+  assert.deepEqual(await store.joinFamily('parent', otherParent.code), family)
+  assert.match((await store.createInvite('parent', family.id, 'maternal')).code, /^[0-9a-f]{32}$/)
 
   const expired = await store.createInvite('owner', family.id, 'maternal')
   const invite = documents.get('projects/fixture/databases/(default)/documents/family_invites/' + expired.code)

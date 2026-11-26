@@ -127,13 +127,35 @@ test('public invitation landing page does not expose the token or album details'
     families: () => { throw new Error('public routes do not read families') },
   })
   const cert = Array(32).fill('AF').join(':')
-  const env = { APP_ENV: 'dev', ANDROID_APP_CERTS: cert, IOS_TEAM_ID: 'ABCD123456' } as Bindings
-  const open = (path: string) => app.fetch(new Request('https://example.invalid' + path), env)
+  const env = { APP_ENV: 'dev', ANDROID_APP_CERTS: cert, IOS_TEAM_ID: 'ABCD123456',
+    IOS_STORE_URL: 'https://testflight.apple.com/join/example' } as Bindings
+  const open = (path: string, agent = '') =>
+    app.fetch(new Request('https://example.invalid' + path, { headers: { 'User-Agent': agent } }), env)
   const code = 'a'.repeat(32)
   const landing = await open('/invite/' + code)
   assert.equal(landing.status, 200)
   assert.equal(landing.headers.get('referrer-policy'), 'no-referrer')
   assert.doesNotMatch(await landing.text(), new RegExp(code))
+  const android = await open('/invite/' + code, 'Mozilla/5.0 (Linux; Android 16) Chrome/141 Safari/537.36')
+  assert.equal(android.status, 302)
+  assert.equal(android.headers.get('location'), 'https://play.google.com/store/apps/details?id=biz.wisemap.family_share')
+  assert.equal(android.headers.get('referrer-policy'), 'no-referrer')
+  const ios = await open('/invite/' + code, 'Mozilla/5.0 (iPhone) Safari/605.1.15')
+  assert.equal(ios.status, 302)
+  assert.equal(ios.headers.get('location'), env.IOS_STORE_URL)
+  const embedded = await open('/invite/' + code, 'Mozilla/5.0 (Linux; Android 16; wv) Line/15.1')
+  assert.equal(embedded.status, 200)
+  const html = await embedded.text()
+  assert.match(html, /すくすくで開く/)
+  assert.match(html, /Google Playでインストール/)
+  assert.doesNotMatch(html, new RegExp(code))
+  const helper = await open('/invite-open.js')
+  assert.match(helper.headers.get('content-type')!, /application\/javascript/)
+  const button = { hidden: true, href: '' }
+  const document = { getElementById: (id: string) => id === 'open-app' ? button : { href: android.headers.get('location') } }
+  new Function('document', 'location', await helper.text())(document, { href: 'https://example.invalid/invite/' + code })
+  assert.equal(button.hidden, false)
+  assert.match(button.href, new RegExp('^intent://example\\.invalid/invite/' + code + '#Intent;scheme=https;package='))
   const assetlinks = await (await open('/.well-known/assetlinks.json')).json()
   assert.deepEqual(assetlinks[0].target, {
     namespace: 'android_app', package_name: 'biz.wisemap.family_share', sha256_cert_fingerprints: [cert],

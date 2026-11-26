@@ -18,13 +18,13 @@ class FamilyMembership {
       name = json['name'] as String,
       role = switch ((json['role'], json['side'])) {
         ('admin', _) => '管理者',
-        ('parent', _) => '親',
+        ('parent', _) => '管理者',
         ('grandparent', 'paternal') => '父方の祖父母',
         ('grandparent', 'maternal') => '母方の祖父母',
         _ => throw const FormatException('Unknown family role'),
       },
       relationship = relationshipNames[json['relationship']],
-      canInvite = json['role'] == 'admin',
+      canInvite = json['role'] == 'admin' || json['role'] == 'parent',
       canPost = json['role'] != 'grandparent';
 
   final String id;
@@ -36,9 +36,9 @@ class FamilyMembership {
 }
 
 enum InviteRole {
-  parent('もう一人の親'),
-  paternal('父方・閲覧のみ'),
-  maternal('母方・閲覧のみ');
+  parent('パートナー'),
+  paternal('パパ方家族'),
+  maternal('ママ方家族');
 
   const InviteRole(this.label);
   final String label;
@@ -210,8 +210,11 @@ class FamilyApiException implements Exception {
 
   String get message => switch ((status, reason)) {
     (400, 'relationship does not match invitation') => '招待内容に合う立場を選んでください。',
-    (409, 'transfer administrator before retirement') =>
-      '退会前に、家族設定で管理者を別の親に引き継いでください。',
+    (409, 'another administrator required') ||
+    (
+      409,
+      'transfer administrator before retirement',
+    ) => '退会前に、パートナーを招待して別の管理者を登録してください。',
     (409, 'upload is being processed') => '前回のアップロードを処理中です。少し待って再試行してください。',
     (409, 'upload in progress; retry deletion later') =>
       'アップロードの終了後に、もう一度削除してください。',

@@ -11,6 +11,10 @@ class AlbumApi {
   AlbumApi(this.api, this.family);
   final FamilyApi api;
   final FamilyMembership family;
+  static const _imageCacheBytes = 16 * 1024 * 1024;
+  final _images = <(String, String), Uint8List>{};
+  final _pendingImages = <(String, String), Future<Uint8List>>{};
+  int _cachedBytes = 0;
   String get path => 'families/${family.id}';
 
   Future<AlbumRow> get(String endpoint, {Map<String, String>? query}) =>
@@ -70,6 +74,30 @@ class AlbumApi {
 
   Future<Uint8List> media(String post, String id) =>
       api.download('$path/posts/$post/media/$id');
+
+  Future<Uint8List> photo(String post, String id) {
+    final key = (post, id);
+    final cached = _images.remove(key);
+    if (cached != null) {
+      _images[key] = cached;
+      return Future.value(cached);
+    }
+    return _pendingImages.putIfAbsent(key, () async {
+      try {
+        final bytes = await media(post, id);
+        if (bytes.lengthInBytes <= _imageCacheBytes) {
+          while (_cachedBytes + bytes.lengthInBytes > _imageCacheBytes) {
+            _cachedBytes -= _images.remove(_images.keys.first)!.lengthInBytes;
+          }
+          _images[key] = bytes;
+          _cachedBytes += bytes.lengthInBytes;
+        }
+        return bytes;
+      } finally {
+        _pendingImages.remove(key);
+      }
+    });
+  }
 
   Future<void> upload(String post, String id, Uint8List bytes, String mime) =>
       api.upload('$path/posts/$post/media/$id', bytes, mime);

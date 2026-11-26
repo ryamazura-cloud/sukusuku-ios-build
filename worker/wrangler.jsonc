@@ -10,7 +10,7 @@
       "name": "family-share-dev",
       "workers_dev": true,
       "preview_urls": false,
-      "vars": {"APP_ENV":"dev","FIREBASE_PROJECT_ID":"photoshare-e1336","ANDROID_APP_CERTS":"CB:16:34:C8:29:A3:EA:F1:91:B0:25:92:BB:4B:52:81:86:9F:33:90:01:3F:E8:40:04:28:05:A2:12:C4:FA:8E"},
+      "vars": {"APP_ENV":"dev","FIREBASE_PROJECT_ID":"photoshare-e1336","IOS_TEAM_ID":"BUJ5D4YYGK","ANDROID_APP_CERTS":"CB:16:34:C8:29:A3:EA:F1:91:B0:25:92:BB:4B:52:81:86:9F:33:90:01:3F:E8:40:04:28:05:A2:12:C4:FA:8E,F4:89:70:57:60:14:65:5B:2D:F6:09:FB:78:2C:D6:69:FD:01:45:CB:3E:96:B9:38:BC:2C:5A:C9:B6:C0:12:76"},
       "r2_buckets": [{"binding":"MEDIA","bucket_name":"family-share-dev"}]
     },
     "prod": {

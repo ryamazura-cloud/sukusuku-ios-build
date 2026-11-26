@@ -45,7 +45,7 @@ class _AccountScreenState extends State<AccountScreen> {
     if (!await confirm(
           context,
           'アカウントを削除',
-          '本人の投稿・写真・動画・コメントを削除します。家族の管理者は、別の親への引き継ぎを先に行ってください。',
+          '本人の投稿・写真・動画・コメントを削除します。管理者が1人の場合は、先にパートナーを招待してください。',
         ) ||
         !mounted) {
       return;
@@ -336,23 +336,6 @@ class _MembersScreenState extends State<MembersScreen> {
     }
   }
 
-  Future<void> transfer(AlbumRow member) async {
-    if (!await confirm(context, '管理者を引き継ぐ', 'この親に家族の管理を引き継ぎます。') || !mounted) {
-      return;
-    }
-    setState(() => busy = true);
-    try {
-      await widget.api.change('administrator', 'PUT', {
-        'successor': member['id'],
-      });
-      if (mounted) Navigator.pop(context, true);
-    } catch (failure) {
-      if (mounted) showFailure(context, failure);
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(title: const Text('家族メンバー')),
@@ -384,19 +367,13 @@ class _MembersScreenState extends State<MembersScreen> {
                         _ => '母方の祖父母',
                       },
                 ),
-                trailing: widget.api.family.canInvite && item['role'] != 'admin'
+                trailing:
+                    widget.api.family.canInvite && item['role'] == 'grandparent'
                     ? PopupMenuButton<InviteRole>(
                         enabled: !busy,
-                        tooltip: '続柄・管理権限',
-                        onSelected: (role) => role == InviteRole.parent
-                            ? transfer(item)
-                            : correctRole(item, role),
+                        tooltip: '家族の区分',
+                        onSelected: (role) => correctRole(item, role),
                         itemBuilder: (_) => [
-                          if (item['role'] == 'parent')
-                            const PopupMenuItem(
-                              value: InviteRole.parent,
-                              child: Text('管理者を引き継ぐ'),
-                            ),
                           for (final role in [
                             InviteRole.paternal,
                             InviteRole.maternal,

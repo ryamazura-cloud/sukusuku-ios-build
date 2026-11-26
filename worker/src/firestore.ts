@@ -110,7 +110,7 @@ export class Firestore implements Store, FamilyStore {
     if (doc?.fields?.active?.booleanValue !== true) return null
     const role = string(doc, 'role')
     const side = string(doc, 'side')
-    if (role === 'admin' || role === 'parent') return { role }
+    if (role === 'admin' || role === 'parent') return { role: 'admin' }
     if (role === 'grandparent' && (side === 'paternal' || side === 'maternal')) {
       return { role, side }
     }
@@ -219,7 +219,7 @@ export class Firestore implements Store, FamilyStore {
       if (profile && (role === 'parent') !== chosenParent) {
         throw new HttpError(400, 'relationship does not match invitation')
       }
-      const member: Member = role === 'parent' ? { role } : { role: 'grandparent', side: role }
+      const member: Member = role === 'parent' ? { role: 'admin' } : { role: 'grandparent', side: role }
       return { result: { family: { id, name, ...member, ...(profile ? { relationship: profile.relationship } : {}) }, joined: true }, writes: [
         this.write(familyPath, { ...family.fields, memberCount: n(count + 1) }),
         this.write(memberPath, {

@@ -93,7 +93,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.descendant(of: find.byType(AppBar), matching: find.text('家族全員')),
+        find.descendant(of: find.byType(AppBar), matching: find.text('全員')),
         findsOneWidget,
       );
       expect(

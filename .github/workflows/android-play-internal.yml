@@ -78,6 +78,22 @@ jobs:
           assert api.scheme == "https" and api.netloc == "family-share-dev.wisemap.workers.dev"
           assert api.path in ("", "/") and not (api.query or api.fragment), "Worker origin required"
           path.write_text(json.dumps(values), encoding="utf-8")
+          # Start Firebase natively when an FCM message arrives before Flutter starts.
+          native = {
+              "project_info": {
+                  "project_number": values["FIREBASE_MESSAGING_SENDER_ID"],
+                  "project_id": values["FIREBASE_PROJECT_ID"],
+              },
+              "client": [{
+                  "client_info": {
+                      "mobilesdk_app_id": values["FIREBASE_ANDROID_APP_ID"],
+                      "android_client_info": {"package_name": "biz.wisemap.family_share"},
+                  },
+                  "api_key": [{"current_key": values["FIREBASE_ANDROID_API_KEY"]}],
+              }],
+              "configuration_version": "1",
+          }
+          pathlib.Path("android/app/google-services.json").write_text(json.dumps(native), encoding="utf-8")
           PY
           chmod +x android/gradlew
           flutter build appbundle --release --no-pub --build-number "$BUILD_NUMBER" --dart-define-from-file="$config"

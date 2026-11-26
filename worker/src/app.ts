@@ -112,7 +112,7 @@ export function createApp(dependencies: Dependencies) {
   })
   app.post('/v1/families', smallBody, async c => {
     const { name, relationship, nickname: memberName, childName, birthday: birth } = await jsonRecord(c.req.raw)
-    const normalized = typeof name === 'string' ? name.trim() : ''
+    const normalized = name === undefined ? '家族のアルバム' : typeof name === 'string' ? name.trim() : ''
     if (!normalized || normalized.length > 60 || /[\u0000-\u001f\u007f]/.test(normalized)) {
       throw new HttpError(400, 'invalid family name')
     }

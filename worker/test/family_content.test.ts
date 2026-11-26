@@ -8,10 +8,15 @@ import { userKey } from '../src/firestore.ts'
 test('family content stays private, supports discussion, and purges only the retiring user', async () => {
   const docs = new Map()
   const files = new Map()
+  const pushes: { token: string; android: { notification: { channel_id: string } }; apns: { payload: { aps: { sound: string } } } }[] = []
   const root = 'projects/fixture/databases/(default)/documents'
   const db = new FamilyContent('fixture', { token: async () => 'oauth' }, async (request, init) => {
     const url = new URL(String(request))
     const path = url.pathname.slice('/v1/'.length)
+    if (url.hostname === 'fcm.googleapis.com') {
+      pushes.push(JSON.parse(String(init?.body)).message)
+      return Response.json({ name: 'messages/mock' })
+    }
     if (path.endsWith(':beginTransaction')) return Response.json({ transaction: 'tx' })
     if (path.endsWith(':rollback')) return Response.json({})
     if (path.endsWith(':commit')) {
@@ -99,10 +104,10 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.deepEqual(await (await request('anon-parent', detail, 'POST', { code: parentToken })).json(), { type: 'parent' })
   const parentJoin = await request('anon-parent', join, 'POST', { code: parentToken, relationship: 'father', nickname: 'Dad' })
   assert.equal(parentJoin.status, 200)
-  assert.equal((await parentJoin.json()).family.role, 'parent')
+  assert.equal((await parentJoin.json()).family.role, 'admin')
 
   const renamePath = anonUrl + '/name'
-  assert.equal((await request('anon-parent', renamePath, 'PUT', { name: 'Denied' })).status, 403)
+  assert.equal((await request('anon-viewer', renamePath, 'PUT', { name: 'Denied' })).status, 403)
   assert.equal((await request('anon-admin', renamePath, 'PUT', { name: '  ' })).status, 400)
   assert.equal((await request('anon-admin', renamePath, 'PUT', { name: ' New album ' })).status, 200)
   assert.equal((await (await request('anon-viewer', '/v1/families/current')).json()).family.name, 'New album')
@@ -138,9 +143,10 @@ test('family content stays private, supports discussion, and purges only the ret
   const fields = { body: 'Private', scope: 'paternal', capturedAt: '2020-03-29', childIds: [child] }
   const payload = { ...fields, media: [{ id: media, type: 'image/jpeg' }] }
   assert.equal((await request('fatherSide', url + '/posts', 'POST', payload)).status, 403)
-  for (const invalid of [{body: '  '}, {scope: ''}, {capturedAt: ''}]) {
+  for (const invalid of [{body: 7}, {scope: ''}, {capturedAt: ''}]) {
     assert.equal((await request('owner', url + '/posts', 'POST', { ...payload, ...invalid })).status, 400)
   }
+  assert.equal((await request('owner', url + '/posts', 'POST', { ...payload, body: undefined })).status, 201)
   const draft = await request('owner', url + '/posts', 'POST', payload)
   assert.equal(draft.status, 201)
   const { id } = await draft.json()
@@ -151,7 +157,17 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await request('owner', object, 'PUT', jpeg)).status, 200)
   assert.equal((await request('owner', object, 'PUT', jpeg)).status, 200)
   assert.equal((await request('fatherSide', object)).status, 404)
+  const settings = url + '/notification-settings'
+  assert.equal((await request('fatherSide', settings, 'PUT', { token: 'no-opt-in' })).status, 200)
+  assert.equal((await (await request('fatherSide', settings)).json()).enabled, false)
+  assert.equal((await request('parent', settings, 'PUT', { token: 'old', preferences: ['post'] })).status, 200)
+  assert.equal((await request('parent', settings, 'PUT', { token: 'updated' })).status, 200)
+  assert.deepEqual((await (await request('parent', settings)).json()).preferences, ['post'])
   assert.equal((await request('owner', path + '/publish', 'POST')).status, 200)
+  assert.equal(pushes.length, 1)
+  assert.equal(pushes[0].token, 'updated')
+  assert.equal(pushes[0].android.notification.channel_id, 'sukusuku_album')
+  assert.equal(pushes[0].apns.payload.aps.sound, 'default')
   for (const uid of ['owner', 'parent', 'fatherSide']) {
     assert.equal((await request(uid, object)).status, 200)
   }
@@ -186,8 +202,8 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await request('fatherSide', object)).status, 404)
   assert.equal((await getNotices('fatherSide')).filter(item => item.kind === 'post').length, 0)
 
-  assert.equal((await request('owner', '/v1/account', 'DELETE')).status, 409)
-  await db.transfer(actor('owner'), userKey('parent'))
+  assert.equal((await request('anon-admin', '/v1/account', 'DELETE')).status, 200)
+  assert.equal((await request('anon-parent', '/v1/account', 'DELETE')).status, 409)
   assert.equal((await request('fatherSide', '/v1/account', 'DELETE')).status, 200)
   const discussion = await (await request('parent', path + '/discussion')).json()
   assert.equal(discussion.comments.length, 0)
@@ -196,7 +212,7 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal(files.size, 0)
   assert.equal(docs.get(root + '/families/' + family.id + '/quota/storage').fields.bytes.integerValue, '0')
   assert.equal((await request('parent', url + '/members')).status, 200)
-  const incorrectInvite = await db.createInvite('parent', family.id, 'parent')
+  const incorrectInvite = await db.createInvite('parent', family.id, 'paternal')
   await db.joinFamily('incorrect', incorrectInvite.code)
   const correction = url + '/members/' + userKey('incorrect') + '/grandparent'
   assert.equal((await request('motherSide', correction, 'PUT', { side: 'maternal' })).status, 403)

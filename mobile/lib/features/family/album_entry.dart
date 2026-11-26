@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +11,7 @@ import '../album/album_screen.dart';
 import '../album/album_widgets.dart';
 import '../album/settings_screens.dart';
 import '../auth/auth.dart';
+import '../notifications/probe.dart';
 import 'family_api.dart';
 import 'family_screen.dart';
 import 'welcome_screen.dart';
@@ -98,7 +100,6 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
   Future<FamilyMembership> submit({
     required String relationship,
     required String nickname,
-    required String albumName,
     required String child,
     required DateTime? birth,
   }) async {
@@ -109,7 +110,7 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
       return api.join(code, relationship: relationship, nickname: nickname);
     }
     return api.createAlbum(
-      albumName: albumName,
+      albumName: '家族のアルバム',
       relationship: relationship,
       nickname: nickname,
       childName: child,
@@ -201,21 +202,75 @@ class _AlbumTabs extends StatefulWidget {
 class _AlbumTabsState extends State<_AlbumTabs> {
   int tab = 0;
   bool openedSettings = false;
-  String? albumName;
+  StreamSubscription<String>? tokenUpdates;
+  StreamSubscription<RemoteMessage>? foregroundNotices;
+
+  @override
+  void initState() {
+    super.initState();
+    final messaging = FirebaseMessaging.instance;
+    tokenUpdates = messaging.onTokenRefresh.listen(
+      (token) => unawaited(syncToken(token)),
+    );
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      unawaited(enableForegroundPresentation(messaging));
+    } else if (defaultTargetPlatform == TargetPlatform.android) {
+      foregroundNotices = FirebaseMessaging.onMessage.listen((notice) {
+        if (!mounted || notice.data['album'] != 'notices') return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('家族のアルバムに新しいお知らせがあります。'),
+            action: SnackBarAction(
+              label: '開く',
+              onPressed: () {
+                if (mounted) setState(() => tab = 1);
+              },
+            ),
+          ),
+        );
+      });
+    }
+    unawaited(syncToken());
+  }
+
+  Future<void> enableForegroundPresentation(FirebaseMessaging messaging) async {
+    try {
+      await messaging.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+    } catch (_) {
+      // Background notifications remain available.
+    }
+  }
+
+  Future<void> syncToken([String? updatedToken]) async {
+    try {
+      final token = updatedToken ?? await NotificationProbe().existingToken();
+      if (!mounted || token == null) return;
+      await widget.api.change('notification-settings', 'PUT', {'token': token});
+    } catch (_) {
+      // Notification settings can be opened to retry registration.
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(tokenUpdates?.cancel());
+    unawaited(foregroundNotices?.cancel());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
     body: IndexedStack(
       index: tab,
       children: [
-        AlbumScreen(widget.api, active: tab == 0, albumName: albumName),
+        AlbumScreen(widget.api, active: tab == 0),
         if (tab == 1) NoticesScreen(widget.api) else const SizedBox(),
         if (openedSettings)
-          FamilyScreen(
-            widget.base,
-            embedded: true,
-            onAlbumRenamed: (name) => setState(() => albumName = name),
-          )
+          FamilyScreen(widget.base, embedded: true)
         else
           const SizedBox(),
       ],
@@ -250,7 +305,6 @@ class _AlbumTabsState extends State<_AlbumTabs> {
 typedef _SubmitEntry = Future<FamilyMembership> Function({
   required String relationship,
   required String nickname,
-  required String albumName,
   required String child,
   required DateTime? birth,
 });
@@ -277,7 +331,6 @@ class _EntryForm extends StatefulWidget {
 class _EntryFormState extends State<_EntryForm> {
   final form = GlobalKey<FormState>();
   final nickname = TextEditingController();
-  final album = TextEditingController();
   final child = TextEditingController();
   String? relationship;
   DateTime? birth;
@@ -287,7 +340,6 @@ class _EntryFormState extends State<_EntryForm> {
   @override
   void dispose() {
     nickname.dispose();
-    album.dispose();
     child.dispose();
     super.dispose();
   }
@@ -306,7 +358,6 @@ class _EntryFormState extends State<_EntryForm> {
       final family = await widget.submit(
         relationship: relationship!,
         nickname: nickname.text,
-        albumName: album.text,
         child: child.text,
         birth: birth,
       );
@@ -374,7 +425,7 @@ class _EntryFormState extends State<_EntryForm> {
                 validator: (value) => value == null ? '立場を選んでください。' : null,
               ),
               const SizedBox(height: 12),
-              field('あだ名', nickname),
+              field('ニックネーム（後で変更可）', nickname),
               if (widget.creating) ...[
                 field('子どもの名前', child),
                 OutlinedButton.icon(
@@ -396,7 +447,6 @@ class _EntryFormState extends State<_EntryForm> {
                     birth == null ? '子どもの生年月日を選ぶ' : '生年月日 ${dateLabel(birth!)}',
                   ),
                 ),
-                field('アルバム名', album),
               ],
               if (error case final message?) Text(message),
               if (busy) const LinearProgressIndicator(),

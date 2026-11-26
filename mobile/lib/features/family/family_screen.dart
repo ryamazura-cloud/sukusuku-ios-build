@@ -13,15 +13,9 @@ import '../album/settings_screens.dart';
 import 'family_api.dart';
 
 class FamilyScreen extends ConsumerStatefulWidget {
-  const FamilyScreen(
-    this.base, {
-    super.key,
-    this.embedded = false,
-    this.onAlbumRenamed,
-  });
+  const FamilyScreen(this.base, {super.key, this.embedded = false});
   final Uri base;
   final bool embedded;
-  final ValueChanged<String>? onAlbumRenamed;
 
   @override
   ConsumerState<FamilyScreen> createState() => _FamilyScreenState();
@@ -29,6 +23,7 @@ class FamilyScreen extends ConsumerStatefulWidget {
 
 class _FamilyScreenState extends ConsumerState<FamilyScreen> {
   late Future<FamilyMembership?> membership = api.current();
+  late Future<AlbumRow> profile = api.request('profile');
   InviteRole? target;
   ({String code, DateTime expiresAt})? invitation;
   bool busy = false;
@@ -66,45 +61,52 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
   Widget familyDetails(FamilyMembership family) {
     final album = AlbumApi(api, family);
     final currentInvite = invitation;
+    final inviteLink = currentInvite == null
+        ? null
+        : widget.base.resolve('/invite/${currentInvite.code}').toString();
     final role = target;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(family.name, style: Theme.of(context).textTheme.headlineSmall),
         Text('あなたの権限：${family.role}'),
-        if (family.canInvite)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: busy
+        FutureBuilder<AlbumRow>(
+          future: profile,
+          builder: (context, snapshot) {
+            final current = snapshot.data?['name'] as String? ?? '';
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('ニックネーム'),
+              subtitle: current.isEmpty ? null : Text(current),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: busy || snapshot.connectionState != ConnectionState.done
                   ? null
                   : () async {
-                      final name = await textDialog(
+                      final input = await textDialog(
                         context,
-                        'アルバム名を変更',
-                        label: 'アルバム名',
-                        initial: family.name,
-                        maxLength: 60,
+                        'ニックネームを変更',
+                        label: 'ニックネーム',
+                        initial: current,
                       );
+                      final name = input?.trim();
                       if (!mounted ||
                           name == null ||
-                          name.trim().isEmpty ||
-                          name.trim() == family.name)
+                          name.isEmpty ||
+                          name == current) {
                         return;
+                      }
                       await perform(() async {
-                        await album.change('name', 'PUT', {
-                          'name': name.trim(),
-                        });
-                        if (mounted) {
-                          widget.onAlbumRenamed?.call(name.trim());
-                          reload();
-                        }
+                        final saved = await api.request(
+                          'profile',
+                          method: 'PUT',
+                          body: {'name': name},
+                        );
+                        if (mounted)
+                          setState(() => profile = Future.value(saved));
                       });
                     },
-              icon: const Icon(Icons.edit_outlined),
-              label: const Text('アルバム名を変更'),
-            ),
-          ),
+            );
+          },
+        ),
         const SizedBox(height: 16),
         OutlinedButton(
           onPressed: busy
@@ -165,9 +167,7 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
                       final target = context.findRenderObject() as RenderBox?;
                       await SharePlus.instance.share(
                         ShareParams(
-                          text: widget.base
-                              .resolve('/invite/${currentInvite.code}')
-                              .toString(),
+                          text: inviteLink,
                           sharePositionOrigin: target == null
                               ? null
                               : target.localToGlobal(Offset.zero) & target.size,
@@ -179,7 +179,7 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
             ),
           if (currentInvite != null) ...[
             const SizedBox(height: 12),
-            SelectableText(widget.base.resolve('/invite/').toString()),
+            SelectableText(inviteLink!),
             Text(
               '有効期限：${MaterialLocalizations.of(context).formatShortDate(currentInvite.expiresAt)} '
               '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(currentInvite.expiresAt))}',
@@ -189,11 +189,7 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
               onPressed: busy
                   ? null
                   : () => perform(() async {
-                      await Clipboard.setData(
-                        ClipboardData(
-                          text: widget.base.resolve('/invite/').toString(),
-                        ),
-                      );
+                      await Clipboard.setData(ClipboardData(text: inviteLink));
                       if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('招待リンクをコピーしました。')),

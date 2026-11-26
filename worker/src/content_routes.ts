@@ -37,7 +37,7 @@ function input(fields: Record<string, unknown>): PostInput {
   if (typeof scope !== 'string' || !scopes.includes(scope) || !Array.isArray(childIds) || childIds.length > 20) {
     throw new HttpError(400, 'invalid post settings')
   }
-  return { body: text(body, 1200), scope: scope as Scope,
+  return { body: text(body === undefined ? '' : body, 1200, true), scope: scope as Scope,
     childIds: [...new Set(childIds.map(id => ensureId(id)))], capturedAt: date(capturedAt) }
 }
 
@@ -203,6 +203,10 @@ export function registerContent(
   app.get(family + '/notification-settings', async c => c.json(await db(c).notificationSettings(actor(c)), 200, headers))
   app.put(family + '/notification-settings', small, async c => {
     const { token, preferences } = await json(c.req.raw)
+    if (preferences === undefined) {
+      await db(c).refreshNotificationToken(actor(c), text(token, 1024))
+      return c.json({ ok: true }, 200, headers)
+    }
     if (!Array.isArray(preferences) || preferences.length > kinds.length ||
         !preferences.every(kind => typeof kind === 'string' && kinds.includes(kind))) {
       throw new HttpError(400, 'invalid preferences')

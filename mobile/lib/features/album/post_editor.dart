@@ -54,8 +54,8 @@ class _PostEditorState extends State<PostEditor> {
     final text = body.text.trim();
     final audience = scope;
     final captured = date;
-    if (text.isEmpty || audience == null || captured == null) {
-      setState(() => error = '投稿本文、共有範囲、撮影日を入力してください。');
+    if (audience == null || captured == null) {
+      setState(() => error = '共有範囲と撮影日を入力してください。');
       return;
     }
     if (widget.post == null && attachments.isEmpty) {
@@ -177,14 +177,19 @@ class _PostEditorState extends State<PostEditor> {
               enabled: !locked,
               maxLength: 1200,
               maxLines: 4,
-              decoration: const InputDecoration(labelText: '投稿本文（必須）'),
+              decoration: const InputDecoration(labelText: '投稿本文（任意）'),
             ),
             DropdownButtonFormField<String>(
               initialValue: scope,
               decoration: const InputDecoration(labelText: '共有範囲（必須）'),
               items: [
                 for (final entry in scopes.entries)
-                  DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+                  if (entry.key != 'parents' || scope == 'parents')
+                    DropdownMenuItem(
+                      value: entry.key,
+                      enabled: entry.key != 'parents',
+                      child: Text(entry.value),
+                    ),
               ],
               onChanged: locked
                   ? null

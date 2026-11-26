@@ -11,10 +11,9 @@ import 'post_editor.dart';
 import 'post_screen.dart';
 
 class AlbumScreen extends StatefulWidget {
-  const AlbumScreen(this.api, {super.key, this.active = true, this.albumName});
+  const AlbumScreen(this.api, {super.key, this.active = true});
   final AlbumApi api;
   final bool active;
-  final String? albumName;
 
   @override
   State<AlbumScreen> createState() => _AlbumScreenState();
@@ -129,9 +128,7 @@ class _AlbumScreenState extends State<AlbumScreen> {
       }
       if (snapshot.hasError) {
         return Scaffold(
-          appBar: AppBar(
-            title: Text(widget.albumName ?? widget.api.family.name),
-          ),
+          appBar: AppBar(title: const Text('アルバム')),
           body: Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -357,11 +354,10 @@ class _MediaTileState extends State<_MediaTile> {
   late final Future<Uint8List?> thumbnail = load();
 
   Future<Uint8List?> load() async {
-    final data = await widget.api.media(
-      widget.postId,
-      widget.item['id'] as String,
-    );
-    if (!video || !mounted) return video ? null : data;
+    final id = widget.item['id'] as String;
+    if (!video) return widget.api.photo(widget.postId, id);
+    final data = await widget.api.media(widget.postId, id);
+    if (!mounted) return null;
     final temp = await Directory.systemTemp.createTemp('sukusuku-thumb-');
     try {
       final file = await File('${temp.path}/thumb.mp4').writeAsBytes(data);

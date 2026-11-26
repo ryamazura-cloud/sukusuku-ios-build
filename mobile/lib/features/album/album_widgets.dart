@@ -125,9 +125,9 @@ void showFailure(BuildContext context, Object error) {
 
 const scopes = {
   'parents': '両親のみ',
-  'all': '家族全員',
-  'paternal': '両親と父方の祖父母',
-  'maternal': '両親と母方の祖父母',
+  'all': '全員',
+  'paternal': '両親とパパ方家族',
+  'maternal': '両親とママ方家族',
 };
 
 const reactions = {

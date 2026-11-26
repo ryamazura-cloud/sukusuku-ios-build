@@ -1,6 +1,9 @@
 package biz.wisemap.family_share
 
 import android.app.AlertDialog
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.os.Build
 import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
@@ -19,6 +22,11 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel("sukusuku_album", "アルバムのお知らせ", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "biz.wisemap.family_share/video")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

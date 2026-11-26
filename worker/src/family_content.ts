@@ -14,9 +14,10 @@ const asJson = <T>(doc: Doc, key: string): T => JSON.parse(string(doc, key) ?? '
 export class FamilyContent extends Firestore {
   private remove(path: string): Write { return { delete: this.root + '/' + path } }
 
-  private listPage(path: string, cursor: string, order: string, size: number) {
+  private listPage(path: string, cursor: string, order: string, size: number, tx?: string) {
     const params = new URLSearchParams({ pageSize: String(size), orderBy: order })
     if (cursor) params.set('pageToken', cursor)
+    if (tx) params.set('transaction', tx)
     return this.call<{ documents?: Doc[]; nextPageToken?: string }>('/' + path + '?' + params)
   }
 
@@ -37,10 +38,10 @@ export class FamilyContent extends Firestore {
     }
   }
 
-  private async *documents(path: string) {
+  private async *documents(path: string, tx?: string) {
     let cursor = ''
     do {
-      const page = await this.listPage(path, cursor, '__name__ asc', 100)
+      const page = await this.listPage(path, cursor, '__name__ asc', 100, tx)
       yield* page.documents ?? []
       cursor = page.nextPageToken ?? ''
     } while (cursor)
@@ -77,7 +78,7 @@ export class FamilyContent extends Firestore {
     } else if (string(doc, 'state') !== ready || !mayView(member, string(doc, 'scope') as Scope)) {
       throw new HttpError(404, 'post not found')
     }
-    return { doc, path }
+    return { doc, path, member }
   }
 
   async profile(uid: string, name?: string) {
@@ -104,15 +105,12 @@ export class FamilyContent extends Firestore {
 
   async transfer(actor: Actor, successor: string) {
     return this.transaction(async tx => {
-      const { doc, member } = await this.member(actor, tx)
+      const { member } = await this.member(actor, tx)
       if (member.role !== 'admin') throw new HttpError(403, 'administrator required')
       const path = this.family(actor) + '/members/' + successor
       const next = await this.get(path, tx)
-      if (this.familyMember(next)?.role !== 'parent') throw new HttpError(409, 'choose an active parent')
-      return { result: undefined, writes: [
-        this.write(path, { ...next?.fields, role: s('admin') }),
-        this.write(this.memberPath(actor), { ...doc.fields, role: s('parent') }),
-      ] }
+      if (this.familyMember(next)?.role !== 'admin') throw new HttpError(409, 'choose an active parent')
+      return { result: undefined, writes: [] }
     })
   }
 
@@ -315,8 +313,8 @@ export class FamilyContent extends Firestore {
   }
 
   async detail(actor: Actor, id: string) {
-    const { doc } = await this.post(actor, id)
-    return this.summary(doc, actor, (await this.member(actor)).member.role === 'admin')
+    const { doc, member } = await this.post(actor, id)
+    return this.summary(doc, actor, member.role === 'admin')
   }
 
   async download(actor: Actor, id: string, item: string, bucket: R2Bucket) {
@@ -468,12 +466,22 @@ export class FamilyContent extends Firestore {
     if (owner) await this.notify(actor, id, 'commentReaction', 'reaction-' + crypto.randomUUID(), owner).catch(() => {})
   }
 
+  async refreshNotificationToken(actor: Actor, token: string) {
+    await this.transaction(async tx => {
+      const { doc } = await this.member(actor, tx)
+      const current = string(doc, 'deviceToken')
+      return { result: undefined, writes: current && current !== token ? [
+        this.write(this.memberPath(actor), { ...doc.fields, deviceToken: s(token) }),
+      ] : [] }
+    })
+  }
+
   async notificationSettings(actor: Actor, token?: string, preferences?: string[]) {
     return this.transaction(async tx => {
       const { doc } = await this.member(actor, tx)
       if (token === undefined || preferences === undefined) return { result: {
         enabled: !!string(doc, 'deviceToken'), preferences: string(doc, 'preferences') ?
-          asJson<string[]>(doc, 'preferences') : ['post', 'comment', 'reaction'],
+          asJson<string[]>(doc, 'preferences') : ['post', 'comment', 'reaction', 'join'],
       }, writes: [] }
       return { result: { enabled: !!token, preferences }, writes: [
         this.write(this.memberPath(actor), { ...doc.fields, deviceToken: s(token), preferences: s(JSON.stringify(preferences)) }),
@@ -507,7 +515,7 @@ export class FamilyContent extends Firestore {
       const enabled = string(candidate, 'preferences')
       const token = string(candidate, 'deviceToken')
       if (token && (!pushRecipient || key === pushRecipient) &&
-          (enabled ? asJson<string[]>(candidate, 'preferences').includes(preference) : kind !== 'join')) {
+          (!enabled || asJson<string[]>(candidate, 'preferences').includes(preference))) {
         tokens.push(token)
       }
     }
@@ -522,9 +530,19 @@ export class FamilyContent extends Firestore {
           headers: { Authorization: 'Bearer ' + credential, 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: { token, notification: {
             title: 'すくすく', body: '家族のアルバムに新しいお知らせがあります。',
-          }, data: { album: 'notices' } } }),
+          },
+          android: { priority: 'HIGH', notification: { channel_id: 'sukusuku_album' } },
+          apns: { payload: { aps: { sound: 'default' } } },
+          data: { album: 'notices' } } }),
         })
-        if (!response.ok) console.warn('FCM notification delivery rejected', response.status)
+        if (!response.ok) {
+          const body = await response.json().catch(() => null) as {
+            error?: { status?: string; details?: { errorCode?: string }[] }
+          } | null
+          const code = body?.error?.details?.find(detail => detail.errorCode)?.errorCode ?? body?.error?.status
+          console.warn('FCM notification delivery rejected', response.status,
+            code && /^[A-Z_]+$/.test(code) ? code : 'UNKNOWN')
+        }
       } catch { console.warn('FCM notification delivery unavailable') }
     }))
   }
@@ -568,7 +586,14 @@ export class FamilyContent extends Firestore {
         const memberPath = familyPath + '/members/' + user
         const member = await this.get(memberPath, tx)
         if (this.familyMember(member)?.role === 'admin') {
-          throw new HttpError(409, 'transfer administrator before retirement')
+          let anotherAdmin = false
+          for await (const candidate of this.documents(familyPath + '/members', tx)) {
+            if (idOf(candidate) !== user && this.familyMember(candidate)?.role === 'admin') {
+              anotherAdmin = true
+              break
+            }
+          }
+          if (!anotherAdmin) throw new HttpError(409, 'another administrator required')
         }
         const family = await this.get(familyPath, tx)
         if (family && this.familyMember(member)) {

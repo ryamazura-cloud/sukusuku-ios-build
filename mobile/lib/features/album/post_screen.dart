@@ -24,7 +24,8 @@ class PostScreen extends StatefulWidget {
 class _PostScreenState extends State<PostScreen> {
   static const _background = Color(0xFFFFFCF6);
 
-  late Future<(AlbumRow, AlbumRow)> data = load();
+  late Future<AlbumRow> postData = widget.api.get(endpoint);
+  late Future<AlbumRow> discussionData = loadDiscussion();
   final more = <AlbumRow>[];
   String? page;
   bool busy = false;
@@ -41,13 +42,7 @@ class _PostScreenState extends State<PostScreen> {
   bool changed = false;
   String get endpoint => 'posts/${widget.id}';
 
-  Future<(AlbumRow, AlbumRow)> load() async {
-    final result = await Future.wait([
-      widget.api.get(endpoint),
-      widget.api.get('$endpoint/discussion'),
-    ]);
-    return (result[0], result[1]);
-  }
+  Future<AlbumRow> loadDiscussion() => widget.api.get('$endpoint/discussion');
 
   Future<void> act(
     Future<void> Function() operation, {
@@ -59,7 +54,7 @@ class _PostScreenState extends State<PostScreen> {
       await operation();
       if (mounted && reload) {
         setState(() {
-          data = load();
+          discussionData = loadDiscussion();
           more.clear();
           updatedComments.clear();
           page = null;
@@ -324,9 +319,9 @@ class _PostScreenState extends State<PostScreen> {
       centerTitle: true,
       toolbarHeight: 68,
       title: FutureBuilder(
-        future: data,
+        future: postData,
         builder: (context, snapshot) {
-          final post = snapshot.data?.$1;
+          final post = snapshot.data;
           if (post == null) return const Text('投稿');
           final day = DateTime.tryParse(post['capturedAt'] as String? ?? '');
           final title = day == null
@@ -356,238 +351,266 @@ class _PostScreenState extends State<PostScreen> {
       ),
       leading: BackButton(onPressed: () => Navigator.pop(context, changed)),
     ),
-    body: FutureBuilder(
-      future: data,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done &&
-            !snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text(errorLabel(snapshot.error)));
-        }
-        final (post, discussion) = snapshot.data!;
-        final counts = discussion['reactions'] as AlbumRow;
-        final own = discussion['own'] as List;
-        final next = page ?? discussion['next'] as String;
-        final images = rows(post['media']);
-        final media =
-            images
-                .where(
-                  (item) => item['id'] == (selected ?? widget.selectedMediaId),
-                )
-                .firstOrNull ??
-            images.firstOrNull;
-        final mediaIndex = images.indexWhere(
-          (item) => item['id'] == media?['id'],
-        );
-        final path = widget.api;
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
-          children: [
-            if (media != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(20),
-                child: SizedBox(
-                  height: (MediaQuery.sizeOf(context).width * .96)
-                      .clamp(240.0, 530.0)
-                      .toDouble(),
-                  child: MediaViewer(
-                    path,
-                    widget.id,
-                    media,
-                    key: ValueKey(media['id']),
-                    inline: true,
+    body: FutureBuilder<AlbumRow>(
+      future: discussionData,
+      builder: (context, discussionSnapshot) => FutureBuilder<AlbumRow>(
+        future: postData,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done &&
+              !snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(child: Text(errorLabel(snapshot.error)));
+          }
+          final post = snapshot.data!;
+          final discussion = discussionSnapshot.data ?? {};
+          final counts = discussion['reactions'] as AlbumRow? ?? {};
+          final own = discussion['own'] as List? ?? [];
+          final next = page ?? discussion['next'] as String? ?? '';
+          final comments =
+              {
+                for (final item in [...more, ...rows(discussion['comments'])])
+                  item['id']: item,
+              }.values.toList()..sort((a, b) {
+                final order = (a['at'] as String? ?? '').compareTo(
+                  b['at'] as String? ?? '',
+                );
+                return order != 0
+                    ? order
+                    : (a['id'] as String).compareTo(b['id'] as String);
+              });
+          final images = rows(post['media']);
+          final media =
+              images
+                  .where(
+                    (item) =>
+                        item['id'] == (selected ?? widget.selectedMediaId),
+                  )
+                  .firstOrNull ??
+              images.firstOrNull;
+          final mediaIndex = images.indexWhere(
+            (item) => item['id'] == media?['id'],
+          );
+          final path = widget.api;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 28),
+            children: [
+              if (media != null)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(20),
+                  child: SizedBox(
+                    height: (MediaQuery.sizeOf(context).width * .96)
+                        .clamp(240.0, 530.0)
+                        .toDouble(),
+                    child: MediaViewer(
+                      path,
+                      widget.id,
+                      media,
+                      key: ValueKey(media['id']),
+                      inline: true,
+                    ),
                   ),
                 ),
-              ),
-            if (images.length > 1)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton(
-                    tooltip: '前のメディア',
-                    onPressed: mediaIndex > 0
-                        ? () => setState(
-                            () => selected =
-                                images[mediaIndex - 1]['id'] as String,
-                          )
-                        : null,
-                    icon: const Icon(Icons.chevron_left),
-                  ),
-                  Text('${mediaIndex + 1} / ${images.length}'),
-                  IconButton(
-                    tooltip: '次のメディア',
-                    onPressed: mediaIndex + 1 < images.length
-                        ? () => setState(
-                            () => selected =
-                                images[mediaIndex + 1]['id'] as String,
-                          )
-                        : null,
-                    icon: const Icon(Icons.chevron_right),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 12),
-            postContent(
-              header: authorLine(post['author'] as String, post['createdAt']),
-              text: post['body'] as String,
-              extra: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final child in widget.children)
-                    if ((post['childIds'] as List).contains(child['id']))
-                      Padding(
-                        padding: const EdgeInsets.only(top: 8),
-                        child: Text(
-                          '${child['name']}  ${ageAt(child['birthday'] as String, post['capturedAt'] as String)}',
-                        ),
-                      ),
-                ],
-              ),
-            ),
-            if (post['mine'] == true || post['canDelete'] == true)
-              Wrap(
-                spacing: 8,
-                children: [
-                  if (post['mine'] == true)
-                    OutlinedButton(
-                      onPressed: busy
-                          ? null
-                          : () async {
-                              final saved = await Navigator.push<bool>(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => PostEditor(
-                                    path,
-                                    widget.children,
-                                    post: post,
-                                  ),
-                                ),
-                              );
-                              if (saved == true && mounted) {
-                                setState(() {
-                                  changed = true;
-                                  data = load();
-                                });
-                              }
-                            },
-                      child: const Text('編集'),
+              if (images.length > 1)
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    IconButton(
+                      tooltip: '前のメディア',
+                      onPressed: mediaIndex > 0
+                          ? () => setState(
+                              () => selected =
+                                  images[mediaIndex - 1]['id'] as String,
+                            )
+                          : null,
+                      icon: const Icon(Icons.chevron_left),
                     ),
-                  if (post['canDelete'] == true)
-                    TextButton(
-                      onPressed: busy
-                          ? null
-                          : () async {
+                    Text('${mediaIndex + 1} / ${images.length}'),
+                    IconButton(
+                      tooltip: '次のメディア',
+                      onPressed: mediaIndex + 1 < images.length
+                          ? () => setState(
+                              () => selected =
+                                  images[mediaIndex + 1]['id'] as String,
+                            )
+                          : null,
+                      icon: const Icon(Icons.chevron_right),
+                    ),
+                  ],
+                ),
+              const SizedBox(height: 12),
+              postContent(
+                header: authorLine(post['author'] as String, post['createdAt']),
+                text: post['body'] as String,
+                extra: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final child in widget.children)
+                      if ((post['childIds'] as List).contains(child['id']))
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Text(
+                            '${child['name']}  ${ageAt(child['birthday'] as String, post['capturedAt'] as String)}',
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+              if (post['mine'] == true || post['canDelete'] == true)
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    if (post['mine'] == true)
+                      OutlinedButton(
+                        onPressed: busy
+                            ? null
+                            : () async {
+                                final saved = await Navigator.push<bool>(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => PostEditor(
+                                      path,
+                                      widget.children,
+                                      post: post,
+                                    ),
+                                  ),
+                                );
+                                if (saved == true && mounted) {
+                                  setState(() {
+                                    changed = true;
+                                    postData = widget.api.get(endpoint);
+                                  });
+                                }
+                              },
+                        child: const Text('編集'),
+                      ),
+                    if (post['canDelete'] == true)
+                      TextButton(
+                        onPressed: busy
+                            ? null
+                            : () async {
+                                if (!await confirm(
+                                      context,
+                                      '投稿を削除',
+                                      '写真・動画、コメントも削除されます。',
+                                    ) ||
+                                    !mounted) {
+                                  return;
+                                }
+                                await act(() async {
+                                  await path.change(endpoint, 'DELETE');
+                                  if (mounted)
+                                    Navigator.pop(this.context, true);
+                                }, reload: false);
+                              },
+                        child: const Text('削除'),
+                      ),
+                  ],
+                ),
+              const Divider(),
+              if (discussionSnapshot.hasError)
+                TextButton(
+                  onPressed: () =>
+                      setState(() => discussionData = loadDiscussion()),
+                  child: const Text('コメントとリアクションを再読み込み'),
+                )
+              else if (discussionSnapshot.connectionState !=
+                  ConnectionState.done)
+                const LinearProgressIndicator(),
+              if (discussionSnapshot.hasData)
+                reactionBar(
+                  counts: counts,
+                  own: own,
+                  title: '投稿にリアクション',
+                  onChanged: (kind, enabled) => act(() async {
+                    await path.change('$endpoint/reactions/$kind', 'PUT', {
+                      'enabled': enabled,
+                    });
+                  }),
+                ),
+              for (final item in comments)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: commentBubble(
+                    item,
+                    menu: item['mine'] == true || path.family.canInvite
+                        ? PopupMenuButton<String>(
+                            enabled: !busy,
+                            onSelected: (value) async {
+                              if (value == 'edit') {
+                                await editComment(item);
+                                return;
+                              }
                               if (!await confirm(
                                     context,
-                                    '投稿を削除',
-                                    '写真・動画、コメントも削除されます。',
+                                    'コメントを削除',
+                                    'このコメントを削除します。',
                                   ) ||
                                   !mounted) {
                                 return;
                               }
                               await act(() async {
-                                await path.change(endpoint, 'DELETE');
-                                if (mounted) Navigator.pop(this.context, true);
-                              }, reload: false);
+                                await path.change(
+                                  '$endpoint/comments/${item['id']}',
+                                  'DELETE',
+                                );
+                              });
                             },
-                      child: const Text('削除'),
-                    ),
-                ],
-              ),
-            const Divider(),
-            reactionBar(
-              counts: counts,
-              own: own,
-              title: '投稿にリアクション',
-              onChanged: (kind, enabled) => act(() async {
-                await path.change('$endpoint/reactions/$kind', 'PUT', {
-                  'enabled': enabled,
-                });
-              }),
-            ),
-            for (final item in [...rows(discussion['comments']), ...more])
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: commentBubble(
-                  item,
-                  menu: item['mine'] == true || path.family.canInvite
-                      ? PopupMenuButton<String>(
-                          enabled: !busy,
-                          onSelected: (value) async {
-                            if (value == 'edit') {
-                              await editComment(item);
-                              return;
-                            }
-                            if (!await confirm(
-                                  context,
-                                  'コメントを削除',
-                                  'このコメントを削除します。',
-                                ) ||
-                                !mounted) {
-                              return;
-                            }
-                            await act(() async {
-                              await path.change(
-                                '$endpoint/comments/${item['id']}',
-                                'DELETE',
-                              );
-                            });
-                          },
-                          itemBuilder: (_) => [
-                            if (item['mine'] == true)
+                            itemBuilder: (_) => [
+                              if (item['mine'] == true)
+                                const PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('編集'),
+                                ),
                               const PopupMenuItem(
-                                value: 'edit',
-                                child: Text('編集'),
+                                value: 'delete',
+                                child: Text('削除'),
                               ),
-                            const PopupMenuItem(
-                              value: 'delete',
-                              child: Text('削除'),
-                            ),
-                          ],
-                        )
-                      : null,
+                            ],
+                          )
+                        : null,
+                  ),
+                ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: commentInput,
+                enabled: !busy,
+                maxLength: 800,
+                minLines: 1,
+                maxLines: 4,
+                decoration: InputDecoration(
+                  labelText: 'コメントを入力',
+                  suffixIcon: IconButton(
+                    onPressed: busy ? null : sendComment,
+                    tooltip: 'コメントを送信',
+                    icon: const Icon(Icons.send_outlined),
+                  ),
                 ),
               ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: commentInput,
-              enabled: !busy,
-              maxLength: 800,
-              minLines: 1,
-              maxLines: 4,
-              decoration: InputDecoration(
-                labelText: 'コメントを入力',
-                suffixIcon: IconButton(
-                  onPressed: busy ? null : sendComment,
-                  tooltip: 'コメントを送信',
-                  icon: const Icon(Icons.send_outlined),
+              if (next.isNotEmpty)
+                OutlinedButton(
+                  onPressed: busy
+                      ? null
+                      : () => act(() async {
+                          final result = await path.get(
+                            '$endpoint/discussion',
+                            query: {'cursor': next},
+                          );
+                          if (mounted) {
+                            setState(() {
+                              more.addAll(rows(result['comments']));
+                              page = result['next'] as String;
+                            });
+                          }
+                        }, reload: false),
+                  child: const Text('以前のコメントを表示'),
                 ),
-              ),
-            ),
-            if (next.isNotEmpty)
-              OutlinedButton(
-                onPressed: busy
-                    ? null
-                    : () => act(() async {
-                        final result = await path.get(
-                          '$endpoint/discussion',
-                          query: {'cursor': next},
-                        );
-                        if (mounted) {
-                          setState(() {
-                            more.addAll(rows(result['comments']));
-                            page = result['next'] as String;
-                          });
-                        }
-                      }, reload: false),
-                child: const Text('コメントをさらに表示'),
-              ),
-            if (busy) const LinearProgressIndicator(),
-          ],
-        );
-      },
+              if (busy) const LinearProgressIndicator(),
+            ],
+          );
+        },
+      ),
     ),
   );
 }

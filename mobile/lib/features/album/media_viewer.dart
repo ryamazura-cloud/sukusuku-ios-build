@@ -46,7 +46,9 @@ class _MediaViewerState extends State<MediaViewer> {
 
   Future<void> load() async {
     try {
-      final data = await download();
+      final data = video
+          ? await download()
+          : await widget.api.photo(widget.post, widget.media['id'] as String);
       if (!mounted) return;
       if (!video) {
         setState(() => preview = data);
