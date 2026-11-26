@@ -5,6 +5,7 @@ import { registerInviteLinks } from './invite_links.ts'
 import type { FamilyStore, Store, JoinProfile, ParentRelationship } from './firestore.ts'
 import type { FamilyContent } from './family_content.ts'
 import { registerContent } from './content_routes.ts'
+import { registerDeletionPage } from './deletion_page.ts'
 
 export type Bindings = {
   APP_ENV: string
@@ -99,8 +100,9 @@ export function createApp(dependencies: Dependencies) {
   }
   app.use('/v0/*', authenticate)
   app.use('/v1/*', authenticate)
-  if (dependencies.content && dependencies.recentUid) {
-    registerContent(app, dependencies.content, dependencies.recentUid, jsonRecord, readBody)
+  if (dependencies.content) {
+    registerContent(app, dependencies.content, jsonRecord, readBody, dependencies.recentUid)
+    registerDeletionPage(app, dependencies.content)
   }
   const smallBody = bodyLimit({
     maxSize: 1024,

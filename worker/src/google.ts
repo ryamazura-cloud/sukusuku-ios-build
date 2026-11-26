@@ -35,7 +35,7 @@ export class FirebaseVerifier {
     const ttl = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] ?? 60)
     this.validUntil = now + Math.min(ttl, 86_400)
   }
-  async uid(header: string | undefined, project: string, now = Math.floor(Date.now() / 1000), maximumAuthAge?: number) {
+  async uid(header: string | undefined, project: string, now = Math.floor(Date.now() / 1000), maximumAuthAge?: number, allowAnonymous = false) {
     const token = header?.match(/^Bearer ([\w-]+\.[\w-]+\.[\w-]+)$/i)?.[1]
     if (!token || token.length > 8192 || !project) throw invalid()
     const [head, payload, signature] = token.split('.')
@@ -53,7 +53,9 @@ export class FirebaseVerifier {
         !['iat', 'exp', 'auth_time'].every(key => Number.isSafeInteger(claims[key])) ||
         (claims.iat as number) > now || (claims.auth_time as number) > now ||
         (claims.exp as number) <= now) throw invalid()
-    if (maximumAuthAge !== undefined && now - (claims.auth_time as number) > maximumAuthAge) {
+    const provider = (claims.firebase as { sign_in_provider?: string } | undefined)?.sign_in_provider
+    if (maximumAuthAge !== undefined && !(allowAnonymous && provider === 'anonymous') &&
+        now - (claims.auth_time as number) > maximumAuthAge) {
       throw new HttpError(401, 'recent login required')
     }
     await this.refresh(now)
@@ -84,7 +86,7 @@ export class GoogleAccess {
       signatureAlgorithm, false, ['sign'])
     const jwt = encodeJson({ alg: 'RS256', typ: 'JWT' }) + '.' + encodeJson({
       iss: email, aud: oauthUrl, iat: now, exp: now + 3600,
-      scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging',
+      scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/identitytoolkit',
     })
     const signature = await crypto.subtle.sign(signatureAlgorithm, privateKey, encoder.encode(jwt))
     const response = await fetch(oauthUrl, {

@@ -40,6 +40,10 @@ const inviteLifetime = 24 * 60 * 60 * 1000
 const familyMemberLimit = 10
 export const userKey = (uid: string) => 'u-' + btoa(String.fromCharCode(...new TextEncoder().encode(uid)))
   .replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '')
+export const digest = async (value: string) => Array.from(
+  new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))),
+  byte => byte.toString(16).padStart(2, '0'),
+).join('')
 
 export class Firestore implements Store, FamilyStore {
   protected readonly root: string
@@ -117,6 +121,15 @@ export class Firestore implements Store, FamilyStore {
     return null
   }
 
+  protected async retirementMarker(uid: string, tx?: string) {
+    const path = 'retired_users/' + await digest(uid)
+    const existing = await this.get(path, tx)
+    if (existing) return { path, existing }
+    const legacyPath = 'retired_users/' + userKey(uid)
+    const legacy = await this.get(legacyPath, tx)
+    return legacy ? { path: legacyPath, existing: legacy } : { path, existing: null }
+  }
+
   async membership(uid: string): Promise<FamilyMembership | null> {
     const user = userKey(uid)
     const index = await this.get('family_memberships/' + user)
@@ -154,14 +167,14 @@ export class Firestore implements Store, FamilyStore {
     const user = userKey(uid)
     const index = 'family_memberships/' + user
     return this.transaction<FamilyMembership>(async tx => {
-      if (await this.get('retired_users/' + user, tx)) throw new HttpError(403, 'account inactive')
+      if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
       if (await this.get(index, tx)) throw new HttpError(409, 'already belongs to a family')
       return { result: { id, name, role: 'admin', ...(profile ? { relationship: profile.relationship } : {}) }, writes: [
         this.write(path, { name: s(name), memberCount: n(1) }, true),
         this.write(path + '/members/' + user, { role: s('admin'), active,
           ...(profile ? { relationship: s(profile.relationship) } : {}) }, true),
         ...(profile ? [
-          this.write('profiles/' + user, { name: s(profile.nickname) }, true),
+          this.write('profiles/' + user, { name: s(profile.nickname) }),
           this.write(path + '/children/' + child, { name: s(profile.childName), birthday: s(profile.birthday) }, true),
         ] : []),
         this.write(index, { familyId: s(id) }, true),
@@ -177,7 +190,7 @@ export class Firestore implements Store, FamilyStore {
       if (member?.role !== 'admin') throw new HttpError(403, 'family admin required')
       const expiresAt = new Date(Date.now() + inviteLifetime).toISOString()
       return { result: { code, expiresAt }, writes: [
-        this.write('family_invites/' + code, { familyId: s(family), role: s(role), expiresAt: s(expiresAt) }, true),
+        this.write('family_invites/' + code, { familyId: s(family), issuer: s(userKey(uid)), role: s(role), expiresAt: s(expiresAt) }, true),
       ] }
     })
   }
@@ -189,7 +202,7 @@ export class Firestore implements Store, FamilyStore {
     const index = 'family_memberships/' + user
     const invitePath = 'family_invites/' + code
     const { family, joined } = await this.transaction<{ family: FamilyMembership; joined: boolean }>(async tx => {
-      if (await this.get('retired_users/' + user, tx)) throw new HttpError(403, 'account inactive')
+      if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
       const invite = await this.get(invitePath, tx)
       const id = string(invite, 'familyId')
       const role = string(invite, 'role')

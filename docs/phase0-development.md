@@ -11,12 +11,18 @@
 
 1. Firebaseに開発用プロジェクトを作成し、Spark、Authenticationのメール・パスワード、Cloud Firestore Standardの既定データベースを使います。アプリをAndroidとiOSで登録し、合成データ専用の親・父方祖父母・母方祖父母・未所属のユーザーを作ってUIDを控えます。
 2. `firebase/`に移動し、Firebase CLIで `firebase deploy --only firestore:rules --project DEV_PROJECT_ID` を実行します。モバイル用IDトークンで直接Firestoreへアクセスすると拒否され、Workersの専用サービスアカウントはIAMで操作します。
-3. 開発プロジェクトに専用のGoogleサービスアカウントを作り、Cloud Datastore User（`roles/datastore.user`）を付与します。開発と本番でアカウントと鍵を共有しません。JSONキーの作成が組織で禁止されている場合は、設定を緩和する前に許可された認証方法を確認してください。
+3. 開発プロジェクトに専用のGoogleサービスアカウントを作り、Cloud Datastore User（`roles/datastore.user`）を付与します。現行アプリの通知配信には Firebase Cloud Messaging API Admin（`roles/firebasecloudmessaging.admin`）、アカウント削除には `firebaseauth.users.delete` を含むカスタムロール（または Firebase Authentication Admin）を同じサービスアカウントへ付与します。Firebase Cloud Messaging API を有効にします。開発と本番でアカウントと鍵を共有しません。JSONキーの作成が組織で禁止されている場合は、設定を緩和する前に許可された認証方法を確認してください。
 4. CloudflareでStandardバケット `family-share-dev` を作成します。R2公開開発URLとカスタムドメインは無効にします。名前を変更する場合は `worker/wrangler.jsonc` の開発バインディングも合わせ、`env.dev.vars.FIREBASE_PROJECT_ID` を開発プロジェクトIDに置き換えます。
 5. `worker/`で `npm install` と `npx wrangler login` を実行します。`npx wrangler secret put GOOGLE_CLIENT_EMAIL --env dev` と `npx wrangler secret put GOOGLE_PRIVATE_KEY --env dev` に、専用鍵の `client_email` と `private_key` を入力します。PEMの改行は実改行・エスケープの両方に対応します。複数行の入力が難しい場合は一時ファイルへPEMを抽出し、Wranglerの標準入力へ渡します。キーはチャット、コミット、画面ログに貼らないでください。
 6. `npx wrangler deploy --env dev` を実行して開発用HTTPS URLを控えます。`GET /health` の200は起動確認です。FirestoreとR2の確認には下の送受信試験も必要です。
 7. `mobile/config/dev.example.json` を `mobile/config/local.dev.json` にコピーし、API URL（パスなし）、FirebaseプロジェクトID、Sender ID、各OSのApp IDとAPIキーを入力します。Androidでは正しいプロジェクトの `google-services.json` を `mobile/android/app/` に置くとビルド時にネイティブ設定が生成されます。iOSはDartのFirebaseOptionsで初期化します。
 8. それぞれの実機で `flutter run --dart-define-from-file=config/local.dev.json` を実行します。GitHub Actionsは実サービスの秘密情報なしでアナライズ・テスト・デバッグビルドを行います。初回の依存取得成功後、`pubspec.lock` と `package-lock.json` をコミットしてください。
+
+## 現行アプリの通知と削除の確認
+
+1. AndroidとiPhoneの新しいビルドで、設定の「通知設定」を開き、「端末に通知する」をオンにして保存します。「テスト通知を送る」で各端末の配信を確認し、別の端末から投稿した場合もOSの通知欄に届くことを確認します。TestFlightには対象iOSアプリの本番APNs認証情報が必要です。
+2. テスト専用アルバムで「アカウントとデータの削除」を開き、取り消しと確定、ほかに管理者がいる場合と最後の管理者の場合を確認します。最後の管理者が削除すると、参加者の投稿を含めてアルバムが削除されます。
+3. Webからの削除は、テストアカウントで「削除用コードを発行」して控え、アプリをアンインストールした状態でWorkerの `/account-deletion` を開いて確認します。公開中のプライバシーポリシーの削除申請欄へWeb削除のリンクを設置する前に、コードの入力から削除完了までを検証します。
 
 ## Firestore試験データ
 

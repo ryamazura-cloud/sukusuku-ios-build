@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:uuid/uuid.dart';
 
 import '../auth/auth.dart';
 import '../album/album_api.dart';
@@ -13,9 +14,15 @@ import '../album/settings_screens.dart';
 import 'family_api.dart';
 
 class FamilyScreen extends ConsumerStatefulWidget {
-  const FamilyScreen(this.base, {super.key, this.embedded = false});
+  const FamilyScreen(
+    this.base, {
+    super.key,
+    this.embedded = false,
+    required this.onDeleted,
+  });
   final Uri base;
   final bool embedded;
+  final Future<void> Function() onDeleted;
 
   @override
   ConsumerState<FamilyScreen> createState() => _FamilyScreenState();
@@ -57,6 +64,66 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
       membership = api.current();
     });
   }
+
+  Future<void> deleteAccount() => perform(() async {
+    final info = await api.request('account');
+    if (!mounted) return;
+    final closesAlbum = info['closesAlbum'] == true;
+    if (info['pending'] != true) {
+      final confirmed = await confirm(
+        context,
+        '本当に削除しますか？',
+        closesAlbum
+            ? 'あなたが最後の管理者です。アカウントと、ほかの家族の投稿・写真・動画・コメントを含むアルバム全体を削除します。元に戻せません。'
+            : 'あなたのアカウント、投稿・写真・動画・コメント・リアクションを削除します。元に戻せません。',
+      );
+      if (!confirmed || !mounted) return;
+    }
+    await api.deleteAccount(closesAlbum: closesAlbum);
+    if (mounted) await widget.onDeleted();
+  });
+
+  Future<void> saveDeletionCode() => perform(() async {
+    final confirmed = await confirm(
+      context,
+      '削除用コードを発行しますか？',
+      'コードを保存しておくと、アプリを消した後も公式サイトから削除できます。再発行すると以前のコードは使えなくなります。',
+    );
+    if (!confirmed || !mounted) return;
+    const uuid = Uuid();
+    final code = (uuid.v4() + uuid.v4()).replaceAll('-', '');
+    await api.request(
+      'account/deletion-code',
+      method: 'PUT',
+      body: {'code': code},
+    );
+    if (!mounted) return;
+    final copy = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('削除用コード'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('安全な場所に保管し、他の人と共有しないでください。'),
+            const SizedBox(height: 12),
+            SelectableText(code),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('閉じる'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('コピー'),
+          ),
+        ],
+      ),
+    );
+    if (copy == true) await Clipboard.setData(ClipboardData(text: code));
+  });
 
   Widget familyDetails(FamilyMembership family) {
     final album = AlbumApi(api, family);
@@ -128,6 +195,17 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
                   if (mounted) reload();
                 },
           child: const Text('家族メンバー'),
+        ),
+        OutlinedButton(
+          onPressed: busy
+              ? null
+              : () => Navigator.push<void>(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => NoticesScreen(album, openSettings: true),
+                  ),
+                ),
+          child: const Text('通知設定'),
         ),
         if (family.canInvite) ...[
           const SizedBox(height: 32),
@@ -257,6 +335,18 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
                 ? const Text('アルバムに参加していません。')
                 : familyDetails(family);
           },
+        ),
+        const SizedBox(height: 24),
+        OutlinedButton(
+          onPressed: busy ? null : saveDeletionCode,
+          child: const Text('削除用コードを発行'),
+        ),
+        TextButton(
+          onPressed: busy ? null : deleteAccount,
+          style: TextButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.error,
+          ),
+          child: const Text('アカウントとデータの削除'),
         ),
       ],
     ),

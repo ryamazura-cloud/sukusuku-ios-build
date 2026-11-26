@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -32,6 +33,7 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
   StreamSubscription<RemoteMessage>? notices;
   FamilyMembership? completedFamily;
   bool creating = false;
+  bool deleting = false;
 
   FamilyApi get api => FamilyApi(
     widget.base,
@@ -85,7 +87,24 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
     final restored = await auth.authStateChanges().first;
     if (restored != null && !restored.isAnonymous) await auth.signOut();
     if (!mounted) return (family: null, parentInvite: null);
-    final family = auth.currentUser == null ? null : await api.current();
+    FamilyMembership? family;
+    if (auth.currentUser != null) {
+      try {
+        family = await api.current();
+      } on FamilyApiException catch (error) {
+        if (error.reason != 'account deleted') rethrow;
+        await auth.signOut();
+      } on FirebaseAuthException catch (error) {
+        if (![
+          'user-not-found',
+          'user-disabled',
+          'user-token-expired',
+          'invalid-user-token',
+        ].contains(error.code))
+          rethrow;
+        await auth.signOut();
+      }
+    }
     final code = widget.code;
     if (family != null || code == null)
       return (family: family, parentInvite: null);
@@ -130,6 +149,31 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
     }
   }
 
+  Future<void> finishDeletion() async {
+    await ref.read(authProvider).signOut();
+    if (!mounted) return;
+    setState(() {
+      completedFamily = null;
+      creating = false;
+      entry = Future.value((family: null, parentInvite: null));
+    });
+    if (widget.code != null) context.go('/');
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('アカウントとデータの削除が完了しました。')));
+  }
+
+  Future<void> resumeDeletion() async {
+    setState(() => deleting = true);
+    try {
+      await api.deleteAccount();
+      if (mounted) await finishDeletion();
+    } catch (error) {
+      if (mounted) showFailure(context, error);
+    } finally {
+      if (mounted) setState(() => deleting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<EntryState>(
     future: entry,
@@ -138,6 +182,10 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       }
       if (snapshot.hasError) {
+        final pending =
+            snapshot.error is FamilyApiException &&
+            (snapshot.error as FamilyApiException).reason ==
+                'account retirement in progress';
         return Scaffold(
           appBar: AppBar(title: const Text('すくすく')),
           body: Center(
@@ -146,8 +194,10 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
               children: [
                 Text(errorLabel(snapshot.error), textAlign: TextAlign.center),
                 OutlinedButton(
-                  onPressed: () => setState(() => entry = load()),
-                  child: const Text('再試行'),
+                  onPressed: pending
+                      ? (deleting ? null : resumeDeletion)
+                      : () => setState(() => entry = load()),
+                  child: Text(pending ? '削除を再開' : '再試行'),
                 ),
                 if (widget.code != null)
                   TextButton(
@@ -162,7 +212,11 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
       final value = snapshot.data!;
       final family = completedFamily ?? value.family;
       if (family != null) {
-        return _AlbumTabs(api: AlbumApi(api, family), base: widget.base);
+        return _AlbumTabs(
+          api: AlbumApi(api, family),
+          base: widget.base,
+          onDeleted: finishDeletion,
+        );
       }
       final parentInvite = value.parentInvite;
       if (parentInvite != null) {
@@ -191,15 +245,20 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
 }
 
 class _AlbumTabs extends StatefulWidget {
-  const _AlbumTabs({required this.api, required this.base});
+  const _AlbumTabs({
+    required this.api,
+    required this.base,
+    required this.onDeleted,
+  });
   final AlbumApi api;
   final Uri base;
+  final Future<void> Function() onDeleted;
 
   @override
   State<_AlbumTabs> createState() => _AlbumTabsState();
 }
 
-class _AlbumTabsState extends State<_AlbumTabs> {
+class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   int tab = 0;
   bool openedSettings = false;
   StreamSubscription<String>? tokenUpdates;
@@ -208,8 +267,9 @@ class _AlbumTabsState extends State<_AlbumTabs> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final messaging = FirebaseMessaging.instance;
-    tokenUpdates = messaging.onTokenRefresh.listen(
+    tokenUpdates = messaging.onRegistered.listen(
       (token) => unawaited(syncToken(token)),
     );
     if (defaultTargetPlatform == TargetPlatform.iOS) {
@@ -219,7 +279,11 @@ class _AlbumTabsState extends State<_AlbumTabs> {
         if (!mounted || notice.data['album'] != 'notices') return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('家族のアルバムに新しいお知らせがあります。'),
+            content: Text(
+              notice.data['test'] == 'true'
+                  ? 'テスト通知です。'
+                  : '家族のアルバムに新しいお知らせがあります。',
+            ),
             action: SnackBarAction(
               label: '開く',
               onPressed: () {
@@ -245,11 +309,16 @@ class _AlbumTabsState extends State<_AlbumTabs> {
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(syncToken());
+  }
+
   Future<void> syncToken([String? updatedToken]) async {
     try {
-      final token = updatedToken ?? await NotificationProbe().existingToken();
+      final token = await NotificationProbe().existingToken(updatedToken);
       if (!mounted || token == null) return;
-      await widget.api.change('notification-settings', 'PUT', {'token': token});
+      await widget.api.change('notification-settings', 'PUT', {'fid': token});
     } catch (_) {
       // Notification settings can be opened to retry registration.
     }
@@ -257,6 +326,7 @@ class _AlbumTabsState extends State<_AlbumTabs> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(tokenUpdates?.cancel());
     unawaited(foregroundNotices?.cancel());
     super.dispose();
@@ -270,7 +340,7 @@ class _AlbumTabsState extends State<_AlbumTabs> {
         AlbumScreen(widget.api, active: tab == 0),
         if (tab == 1) NoticesScreen(widget.api) else const SizedBox(),
         if (openedSettings)
-          FamilyScreen(widget.base, embedded: true)
+          FamilyScreen(widget.base, embedded: true, onDeleted: widget.onDeleted)
         else
           const SizedBox(),
       ],
@@ -413,7 +483,7 @@ class _EntryFormState extends State<_EntryForm> {
               DropdownButtonFormField<String>(
                 initialValue: relationship,
                 decoration: InputDecoration(
-                  labelText: widget.creating ? 'パパ or ママ' : '立場',
+                  labelText: widget.creating ? 'パパ or ママ' : '間柄',
                 ),
                 items: [
                   for (final role in roles.entries)
@@ -422,7 +492,11 @@ class _EntryFormState extends State<_EntryForm> {
                 onChanged: busy
                     ? null
                     : (value) => setState(() => relationship = value),
-                validator: (value) => value == null ? '立場を選んでください。' : null,
+                validator: (value) => value != null
+                    ? null
+                    : widget.creating
+                    ? 'パパかママを選んでください。'
+                    : '間柄を選んでください。',
               ),
               const SizedBox(height: 12),
               field('ニックネーム（後で変更可）', nickname),

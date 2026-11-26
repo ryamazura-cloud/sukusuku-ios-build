@@ -8,11 +8,28 @@ import { userKey } from '../src/firestore.ts'
 test('family content stays private, supports discussion, and purges only the retiring user', async () => {
   const docs = new Map()
   const files = new Map()
+  const removedAccounts = new Set<string>()
+  let firebaseDeleteAvailable = true
   const pushes: { token: string; android: { notification: { channel_id: string } }; apns: { payload: { aps: { sound: string } } } }[] = []
   const root = 'projects/fixture/databases/(default)/documents'
   const db = new FamilyContent('fixture', { token: async () => 'oauth' }, async (request, init) => {
     const url = new URL(String(request))
     const path = url.pathname.slice('/v1/'.length)
+    if (url.hostname === 'identitytoolkit.googleapis.com') {
+      const { localId, targetProjectId } = JSON.parse(String(init?.body))
+      assert.equal(url.pathname, '/v1/accounts:delete')
+      assert.equal(targetProjectId, 'fixture')
+      if (!firebaseDeleteAvailable) return Response.json({}, { status: 403 })
+      removedAccounts.add(localId)
+      return Response.json({})
+    }
+    if (path.endsWith(':runQuery')) {
+      const { structuredQuery } = JSON.parse(String(init?.body))
+      const family = structuredQuery.where.fieldFilter.value.stringValue
+      return Response.json([...docs.values()].filter(doc =>
+        doc.name.startsWith(root + '/family_invites/') && doc.fields.familyId.stringValue === family,
+      ).map(document => ({ document })))
+    }
     if (url.hostname === 'fcm.googleapis.com') {
       pushes.push(JSON.parse(String(init?.body)).message)
       return Response.json({ name: 'messages/mock' })
@@ -37,6 +54,14 @@ test('family content stays private, supports discussion, and purges only the ret
       const documents = [...docs.keys()]
         .filter(name => name.startsWith(path + '/') && !name.slice(path.length + 1).includes('/'))
         .sort().map(name => docs.get(name))
+      if (url.searchParams.get('pageSize') === '2' && path.endsWith('/timeline')) {
+        const after = url.searchParams.get('pageToken') ?? ''
+        const remaining = documents.filter(doc => doc.name > after)
+        return Response.json({
+          documents: remaining.slice(0, 2),
+          ...(remaining.length > 2 ? { nextPageToken: remaining[1].name } : {}),
+        })
+      }
       return Response.json({ documents })
     }
     return docs.has(path) ? Response.json(docs.get(path)) : Response.json({}, { status: 404 })
@@ -55,7 +80,7 @@ test('family content stays private, supports discussion, and purges only the ret
     if (!header) throw new HttpError(401, 'no user')
     return header
   }
-  const app = createApp({ uid: func, recentUid: func, store: () => db, families: () => db, content: () => db })
+  const app = createApp({ uid: func, store: () => db, families: () => db, content: () => db })
   const env = { APP_ENV: 'dev', MEDIA: bucket } as Bindings
   const family = await db.createFamily('owner', 'Our family')
   const actor = (uid: string) => ({ family: family.id, uid })
@@ -158,6 +183,12 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await request('owner', object, 'PUT', jpeg)).status, 200)
   assert.equal((await request('fatherSide', object)).status, 404)
   const settings = url + '/notification-settings'
+  assert.equal((await request('fatherSide', settings, 'PUT', { token: 'first-registration' })).status, 200)
+  assert.equal((await (await request('fatherSide', settings)).json()).enabled, true)
+  assert.equal((await request('fatherSide', url + '/notification-test', 'POST')).status, 200)
+  assert.equal(pushes.pop()?.token, 'first-registration')
+  assert.equal((await request('fatherSide', url + '/notification-test', 'POST')).status, 429)
+  assert.equal((await request('fatherSide', settings, 'PUT', { token: '', preferences: ['post'] })).status, 200)
   assert.equal((await request('fatherSide', settings, 'PUT', { token: 'no-opt-in' })).status, 200)
   assert.equal((await (await request('fatherSide', settings)).json()).enabled, false)
   assert.equal((await request('parent', settings, 'PUT', { token: 'old', preferences: ['post'] })).status, 200)
@@ -225,6 +256,49 @@ test('family content stays private, supports discussion, and purges only the ret
     '/grandparent', 'PUT', { side: 'maternal' })).status, 409)
   assert.equal((await request('owner', '/v1/families/current')).status, 403)
   assert.equal((await request('owner', '/v1/account', 'DELETE')).status, 200)
+  assert.ok(removedAccounts.has('owner'))
+  const code = 'e'.repeat(64)
+  assert.equal((await request('anon-parent', '/v1/account/deletion-code', 'PUT', { code: 'd'.repeat(64) })).status, 200)
+  assert.equal((await request('anon-parent', '/v1/account/deletion-code', 'PUT', { code })).status, 200)
+  const web = (code: string, action: string, closeAlbum = 'no') => app.fetch(new Request(
+    'https://example.invalid/account-deletion', {
+      method: 'POST', body: new URLSearchParams({ code, action, closeAlbum }),
+    }), env)
+  assert.equal((await web('d'.repeat(64), 'delete', 'yes')).status, 404)
+  assert.match(await (await web(code, 'preview')).text(), /アルバム全体を削除/)
+  assert.equal((await web(code, 'delete')).status, 503)
+  assert.ok(await db.membership('anon-viewer'))
+  const fid = 'd123456789abcdefghijkl'
+  assert.equal((await request('anon-viewer', anonUrl + '/notification-settings', 'PUT', { fid })).status, 200)
+  assert.equal((await request('anon-viewer', anonUrl + '/notification-test', 'POST')).status, 200)
+  assert.equal((pushes.pop() as { fid?: string } | undefined)?.fid, fid)
+  for (let index = 0; index < 3; index++) {
+    const response = await request('anon-parent', anonUrl + '/posts', 'POST', {
+      ...payload, scope: 'all', childIds: [scheduledChild.children[0].id],
+    })
+    assert.equal(response.status, 201)
+    if (index === 2) {
+      const { id } = await response.json()
+      assert.equal((await request('anon-parent', anonUrl + '/posts/' + id + '/media/' + media, 'PUT', jpeg)).status, 200)
+      assert.equal((await request('anon-parent', anonUrl + '/posts/' + id + '/publish', 'POST')).status, 200)
+      assert.equal((await request('anon-viewer', anonUrl + '/posts/' + id + '/comments', 'POST', { body: 'Good!' })).status, 201)
+    }
+  }
+  firebaseDeleteAvailable = false
+  const firstDeletion = await web(code, 'delete', 'yes')
+  assert.equal(firstDeletion.status, 202)
+  assert.match(firstDeletion.headers.get('Content-Security-Policy') ?? '', /script-src 'nonce-/)
+  assert.equal((await web(code, 'delete')).status, 503)
+  assert.equal(files.size, 0)
+  assert.equal([...docs.keys()].some(key => key.includes('/families/' + created.id + '/timeline/')), false)
+  assert.equal(await db.membership('anon-viewer'), null)
+  assert.equal(docs.has(root + '/profiles/' + userKey('anon-viewer')), true)
+  assert.equal(docs.has(root + '/families/' + created.id), false)
+  assert.equal(docs.has(root + '/families/' + created.id + '/children/' + scheduledChild.children[0].id), false)
+  firebaseDeleteAvailable = true
+  assert.equal((await web(code, 'delete', 'yes')).status, 200)
+  assert.ok(removedAccounts.has('anon-parent'))
+  assert.equal((await web(code, 'delete', 'yes')).status, 404)
 })
 
 test('timeline recovers from a descending list precondition failure and preserves the fallback cursor', async () => {

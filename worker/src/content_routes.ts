@@ -44,9 +44,9 @@ function input(fields: Record<string, unknown>): PostInput {
 export function registerContent(
   app: Hono<AppEnv>,
   store: (env: Bindings) => FamilyContent,
-  recentUid: (header: string | undefined, project: string) => Promise<string>,
   json: (request: Request) => Promise<Record<string, unknown>>,
   readBody: (body: ReadableStream<Uint8Array> | null, size: number) => Promise<ArrayBuffer>,
+  recentUid?: (header: string | undefined, project: string) => Promise<string>,
 ) {
   const family = '/v1/families/:family'
   const post = family + '/posts/:post'
@@ -54,9 +54,11 @@ export function registerContent(
   const postId = (c: Context<AppEnv>) => ensureId(c.req.param('post'), chronId)
   const cursor = (c: Context<AppEnv>) => text(c.req.query('cursor') ?? '', 2048, true)
   const db = (c: Context<AppEnv>) => store(c.env)
+  const deletionUser = (c: Context<AppEnv>) => recentUid
+    ? recentUid(c.req.header('Authorization'), c.env.FIREBASE_PROJECT_ID) : c.get('uid')
 
   app.use('/v1/*', async (c, next) => {
-    if (!(c.req.method === 'DELETE' && c.req.path === '/v1/account')) await db(c).requireAccount(c.get('uid'))
+    if (c.req.path !== '/v1/account') await db(c).requireAccount(c.get('uid'))
     await next()
   })
   app.get('/v1/profile', async c => c.json(await db(c).profile(c.get('uid')), 200, headers))
@@ -64,10 +66,16 @@ export function registerContent(
     const { name } = await json(c.req.raw)
     return c.json(await db(c).profile(c.get('uid'), text(name, 60)), 200, headers)
   })
-  app.delete('/v1/account', async c => {
-    const uid = await recentUid(c.req.header('Authorization'), c.env.FIREBASE_PROJECT_ID)
-    await db(c).retire(uid, c.env.MEDIA)
+  app.get('/v1/account', async c => c.json(await db(c).retirementInfo(c.get('uid')), 200, headers))
+  app.put('/v1/account/deletion-code', small, async c => {
+    const { code } = await json(c.req.raw)
+    await db(c).issueDeletionCode(await deletionUser(c), ensureId(code, /^[0-9a-f]{64}$/))
     return c.json({ ok: true }, 200, headers)
+  })
+  app.delete('/v1/account', small, async c => {
+    const input = c.req.raw.body ? await json(c.req.raw) : {}
+    const done = await db(c).retire(await deletionUser(c), c.env.MEDIA, input.closeAlbum === true)
+    return done ? c.json({ ok: true }, 200, headers) : c.json({ pending: true }, 202, headers)
   })
   app.get(family + '/members', async c => c.json({ members: await db(c).members(actor(c)) }, 200, headers))
   app.put(family + '/members/:member/grandparent', small, async c => {
@@ -201,16 +209,25 @@ export function registerContent(
   })
   app.get(family + '/notifications', async c => c.json(await db(c).notices(actor(c), cursor(c)), 200, headers))
   app.get(family + '/notification-settings', async c => c.json(await db(c).notificationSettings(actor(c)), 200, headers))
+  app.post(family + '/notification-test', async c => {
+    await db(c).testNotification(actor(c))
+    return c.json({ ok: true }, 200, headers)
+  })
   app.put(family + '/notification-settings', small, async c => {
-    const { token, preferences } = await json(c.req.raw)
+    const { token, fid, preferences } = await json(c.req.raw)
+    const useFid = fid !== undefined
+    if (useFid && fid !== '' && (typeof fid !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(fid))) {
+      throw new HttpError(400, 'invalid installation ID')
+    }
+    const value = useFid ? fid : token
     if (preferences === undefined) {
-      await db(c).refreshNotificationToken(actor(c), text(token, 1024))
+      await db(c).refreshNotificationToken(actor(c), text(value, 1024), useFid)
       return c.json({ ok: true }, 200, headers)
     }
     if (!Array.isArray(preferences) || preferences.length > kinds.length ||
         !preferences.every(kind => typeof kind === 'string' && kinds.includes(kind))) {
       throw new HttpError(400, 'invalid preferences')
     }
-    return c.json(await db(c).notificationSettings(actor(c), text(token, 1024, true), [...new Set(preferences)]), 200, headers)
+    return c.json(await db(c).notificationSettings(actor(c), text(value, 1024, true), [...new Set(preferences)], useFid), 200, headers)
   })
 }

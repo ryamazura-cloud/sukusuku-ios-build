@@ -134,7 +134,7 @@ class _ProbeScreenState extends ConsumerState<ProbeScreen> {
               : () => run(() async {
                   final received = await probe.token();
                   if (mounted) setState(() => token = received);
-                  return 'FCMトークンを取得しました。';
+                  return '通知用のインストールIDを取得しました。';
                 }),
           child: const Text('通知の設定を確認'),
         ),
@@ -146,7 +146,7 @@ class _ProbeScreenState extends ConsumerState<ProbeScreen> {
                     await Clipboard.setData(ClipboardData(text: token!));
                     return '通知テスト用トークンをコピーしました。';
                   }),
-            child: const Text('FCMトークンをコピー'),
+            child: const Text('通知用のインストールIDをコピー'),
           ),
         if (busy) const LinearProgressIndicator(),
         SelectableText(status),

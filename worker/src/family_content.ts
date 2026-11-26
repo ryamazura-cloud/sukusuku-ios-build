@@ -1,8 +1,17 @@
 import { HttpError, mayPost, mayView, reserveBytes, type MediaType, type Scope } from './domain.ts'
-import { Firestore, FirestorePrecondition, integer, n, s, string, userKey, type Doc, type Write } from './firestore.ts'
+import { Firestore, FirestorePrecondition, digest, integer, n, s, string, userKey, type Doc, type Write } from './firestore.ts'
 
 type Actor = { uid: string; family: string }
 type Attachment = { id: string; type: MediaType }
+type PushTarget = { token: string } | { fid: string }
+const pushTarget = (doc: Doc | null): PushTarget | undefined => {
+  const fid = string(doc, 'deviceFid')
+  const token = string(doc, 'deviceToken')
+  return fid ? { fid } : token ? { token } : undefined
+}
+const pushFields = (value: string, useFid: boolean) => ({
+  deviceFid: s(useFid ? value : ''), deviceToken: s(useFid ? '' : value),
+})
 export type PostInput = { body: string; scope: Scope; childIds: string[]; capturedAt: string }
 const ready = 'published'
 const now = () => new Date().toISOString()
@@ -52,7 +61,9 @@ export class FamilyContent extends Firestore {
   private postPath(actor: Actor, post: string) { return this.family(actor) + '/timeline/' + post }
 
   async requireAccount(uid: string) {
-    if (await this.get('retired_users/' + userKey(uid))) throw new HttpError(403, 'account retirement in progress')
+    const { existing } = await this.retirementMarker(uid)
+    if (existing) throw new HttpError(403, existing.fields?.complete?.booleanValue === true
+      ? 'account deleted' : 'account retirement in progress')
   }
 
   private async member(actor: Actor, tx?: string) {
@@ -85,7 +96,7 @@ export class FamilyContent extends Firestore {
     const path = 'profiles/' + userKey(uid)
     if (name === undefined) return { name: string(await this.get(path), 'name') ?? '' }
     return this.transaction(async tx => {
-      if (await this.get('retired_users/' + userKey(uid), tx)) throw new HttpError(403, 'account inactive')
+      if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
       return { result: { name }, writes: [this.write(path, { name: s(name) })] }
     })
   }
@@ -354,11 +365,7 @@ export class FamilyContent extends Firestore {
         return { result: undefined, writes }
       })
     }
-    for (const collection of ['comments', 'reactions']) {
-      for await (const item of this.documents(path + '/' + collection)) {
-        await this.send('commit', { writes: [{ delete: item.name }] })
-      }
-    }
+    for (const collection of ['comments', 'reactions']) await this.clearCollection(path + '/' + collection)
     await this.send('commit', { writes: [this.remove(path)] })
   }
 
@@ -466,27 +473,74 @@ export class FamilyContent extends Firestore {
     if (owner) await this.notify(actor, id, 'commentReaction', 'reaction-' + crypto.randomUUID(), owner).catch(() => {})
   }
 
-  async refreshNotificationToken(actor: Actor, token: string) {
+  async refreshNotificationToken(actor: Actor, value: string, useFid = false) {
     await this.transaction(async tx => {
       const { doc } = await this.member(actor, tx)
-      const current = string(doc, 'deviceToken')
-      return { result: undefined, writes: current && current !== token ? [
-        this.write(this.memberPath(actor), { ...doc.fields, deviceToken: s(token) }),
+      const current = pushTarget(doc)
+      const optedOut = doc.fields?.pushEnabled?.booleanValue === false ||
+        (doc.fields?.pushEnabled === undefined && !current && string(doc, 'preferences') !== undefined)
+      return { result: undefined, writes: !optedOut && (useFid ? string(doc, 'deviceFid') : string(doc, 'deviceToken')) !== value ? [
+        this.write(this.memberPath(actor), { ...doc.fields, ...pushFields(value, useFid), pushEnabled: flags }),
       ] : [] }
     })
   }
 
-  async notificationSettings(actor: Actor, token?: string, preferences?: string[]) {
+  async notificationSettings(actor: Actor, token?: string, preferences?: string[], useFid = false) {
     return this.transaction(async tx => {
       const { doc } = await this.member(actor, tx)
       if (token === undefined || preferences === undefined) return { result: {
-        enabled: !!string(doc, 'deviceToken'), preferences: string(doc, 'preferences') ?
+        enabled: doc.fields?.pushEnabled?.booleanValue ?? !!pushTarget(doc),
+        registered: !!pushTarget(doc), preferences: string(doc, 'preferences') ?
           asJson<string[]>(doc, 'preferences') : ['post', 'comment', 'reaction', 'join'],
       }, writes: [] }
-      return { result: { enabled: !!token, preferences }, writes: [
-        this.write(this.memberPath(actor), { ...doc.fields, deviceToken: s(token), preferences: s(JSON.stringify(preferences)) }),
+      return { result: { enabled: !!token, registered: !!token, preferences }, writes: [
+        this.write(this.memberPath(actor), { ...doc.fields, ...pushFields(token, useFid),
+          pushEnabled: { booleanValue: !!token }, preferences: s(JSON.stringify(preferences)) }),
       ] }
     })
+  }
+
+  async testNotification(actor: Actor) {
+    const token = await this.transaction(async tx => {
+      const { doc } = await this.member(actor, tx)
+      const result = pushTarget(doc)
+      if (!result) throw new HttpError(409, 'notification device not registered')
+      if (Date.now() - Date.parse(string(doc, 'lastPushTest') ?? '') < 30_000) {
+        throw new HttpError(429, 'notification test rate limited')
+      }
+      return { result, writes: [
+        this.write(this.memberPath(actor), { ...doc.fields, lastPushTest: s(now()) }),
+      ] }
+    })
+    const error = await this.sendPush(token, true)
+    if (error) throw new HttpError(503, 'notification delivery ' + error)
+  }
+
+  private async sendPush(target: PushTarget, test = false) {
+    const project = this.root.split('/')[1]
+    try {
+      const response = await this.fetcher('https://fcm.googleapis.com/v1/projects/' + project + '/messages:send', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + await this.google.token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: { ...target, notification: {
+          title: 'すくすく', body: test ? 'テスト通知です。' : '家族のアルバムに新しいお知らせがあります。',
+        },
+        android: { priority: 'HIGH', notification: { channel_id: 'sukusuku_album' } },
+        apns: { headers: { 'apns-push-type': 'alert', 'apns-priority': '10' }, payload: { aps: { sound: 'default' } } },
+        data: { album: 'notices', ...(test ? { test: 'true' } : {}) } } }),
+      })
+      if (response.ok) return
+      const body = await response.json().catch(() => null) as {
+        error?: { status?: string; details?: { errorCode?: string }[] }
+      } | null
+      const code = body?.error?.details?.find(detail => detail.errorCode)?.errorCode ?? body?.error?.status
+      const safeCode = code && /^[A-Z_]+$/.test(code) ? code : 'UNKNOWN'
+      console.warn('FCM notification delivery rejected', response.status, safeCode)
+      return safeCode
+    } catch {
+      console.warn('FCM notification delivery unavailable')
+      return 'UNAVAILABLE'
+    }
   }
 
   protected override async onJoined(uid: string, family: string) {
@@ -502,9 +556,9 @@ export class FamilyContent extends Firestore {
     ])
     if (id && string(post, 'state') !== ready) return
     const writes: Write[] = []
-    const tokens: string[] = []
+    const recipients = new Map<string, PushTarget>()
     const noticeId = timeId() + '-' + event
-    const fields = { ...(id ? { post: s(id) } : {}), kind: s(kind), at: s(now()),
+    const fields = { ...(id ? { post: s(id) } : {}), kind: s(kind), at: s(now()), actorId: s(user),
       actor: s(string(profile, 'name') || '家族のメンバー') }
     for await (const candidate of this.documents(members)) {
       const key = idOf(candidate)
@@ -513,37 +567,23 @@ export class FamilyContent extends Firestore {
       writes.push(this.write(members + '/' + key + '/notices/' + noticeId, fields, true))
       const preference = kind === 'commentReaction' ? 'reaction' : kind
       const enabled = string(candidate, 'preferences')
-      const token = string(candidate, 'deviceToken')
+      const token = pushTarget(candidate)
       if (token && (!pushRecipient || key === pushRecipient) &&
           (!enabled || asJson<string[]>(candidate, 'preferences').includes(preference))) {
-        tokens.push(token)
+        recipients.set(key, token)
       }
     }
     if (writes.length) await this.send('commit', { writes })
-    if (!tokens.length) return
-    const project = this.root.split('/')[1]
-    const credential = await this.google.token()
-    await Promise.all(tokens.map(async token => {
-      try {
-        const response = await this.fetcher('https://fcm.googleapis.com/v1/projects/' + project + '/messages:send', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + credential, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: { token, notification: {
-            title: 'すくすく', body: '家族のアルバムに新しいお知らせがあります。',
-          },
-          android: { priority: 'HIGH', notification: { channel_id: 'sukusuku_album' } },
-          apns: { payload: { aps: { sound: 'default' } } },
-          data: { album: 'notices' } } }),
-        })
-        if (!response.ok) {
-          const body = await response.json().catch(() => null) as {
-            error?: { status?: string; details?: { errorCode?: string }[] }
-          } | null
-          const code = body?.error?.details?.find(detail => detail.errorCode)?.errorCode ?? body?.error?.status
-          console.warn('FCM notification delivery rejected', response.status,
-            code && /^[A-Z_]+$/.test(code) ? code : 'UNKNOWN')
-        }
-      } catch { console.warn('FCM notification delivery unavailable') }
+    if (!recipients.size) return
+    await Promise.all([...recipients].map(async ([key, token]) => {
+      if (await this.sendPush(token) !== 'UNREGISTERED') return
+      const path = members + '/' + key
+      await this.transaction(async tx => {
+        const current = await this.get(path, tx)
+        return { result: undefined, writes: this.familyMember(current) &&
+            JSON.stringify(pushTarget(current)) === JSON.stringify(token)
+          ? [this.write(path, { ...current?.fields, ...pushFields('', false), pushEnabled: flags })] : [] }
+      })
     }))
   }
 
@@ -572,49 +612,168 @@ export class FamilyContent extends Firestore {
     return { notices, next: page.nextPageToken ?? '' }
   }
 
-  async retire(uid: string, bucket: R2Bucket) {
+  private async closesAlbum(uid: string, family: string, tx?: string) {
+    const members = 'families/' + family + '/members'
     const user = userKey(uid)
-    const marker = 'retired_users/' + user
+    if (this.familyMember(await this.get(members + '/' + user, tx))?.role !== 'admin') return false
+    for await (const candidate of this.documents(members, tx)) {
+      if (idOf(candidate) !== user && this.familyMember(candidate)?.role === 'admin') return false
+    }
+    return true
+  }
+
+  async retirementInfo(uid: string) {
+    const { existing } = await this.retirementMarker(uid)
+    if (existing) return { pending: true, closesAlbum: existing.fields?.closesAlbum?.booleanValue === true }
+    const family = string(await this.get('family_memberships/' + userKey(uid)), 'familyId')
+    return { pending: false, closesAlbum: family ? await this.closesAlbum(uid, family) : false }
+  }
+
+  async issueDeletionCode(uid: string, code: string) {
+    const hash = await digest(code)
+    const path = 'deletion_codes/' + hash
+    const index = 'account_deletion_codes/' + userKey(uid)
+    await this.transaction(async tx => {
+      if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
+      const previous = string(await this.get(index, tx), 'hash')
+      return { result: undefined, writes: [
+        ...(previous && previous !== hash ? [this.remove('deletion_codes/' + previous)] : []),
+        this.write(path, { uid: s(uid) }),
+        this.write(index, { hash: s(hash) }),
+      ] }
+    })
+  }
+
+  async deletionCodeOwner(code: string) {
+    const uid = string(await this.get('deletion_codes/' + await digest(code)), 'uid')
+    if (!uid) throw new HttpError(404, 'deletion code unavailable')
+    return uid
+  }
+
+  private async forgetFirebaseUser(uid: string) {
+    const project = this.root.split('/')[1]
+    const response = await this.fetcher(
+      'https://identitytoolkit.googleapis.com/v1/accounts:delete', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + await this.google.token(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ localId: uid, targetProjectId: project }),
+      },
+    )
+    if (response.ok) return
+    const body = await response.json().catch(() => null) as { error?: { message?: string } } | null
+    if (body?.error?.message === 'USER_NOT_FOUND') return
+    console.warn('Firebase account deletion rejected', response.status)
+    throw new HttpError(503, 'Firebase account deletion unavailable')
+  }
+
+  private async clearCollection(path: string) {
+    const writes: Write[] = []
+    for await (const doc of this.documents(path)) {
+      writes.push({ delete: doc.name })
+      if (writes.length === 100) await this.send('commit', { writes: writes.splice(0) })
+    }
+    if (writes.length) await this.send('commit', { writes })
+  }
+
+  private async clearInvites(family: string, issuer?: string) {
+    const result = await this.send<{ document?: Doc }[]>('runQuery', { structuredQuery: {
+      from: [{ collectionId: 'family_invites' }],
+      where: { fieldFilter: { field: { fieldPath: 'familyId' }, op: 'EQUAL', value: s(family) } },
+    } })
+    const writes: Write[] = []
+    for (const { document } of result) {
+      if (!document || (issuer && string(document, 'issuer') !== issuer)) continue
+      writes.push({ delete: document.name })
+      if (writes.length === 100) await this.send('commit', { writes: writes.splice(0) })
+    }
+    if (writes.length) await this.send('commit', { writes })
+  }
+
+  async retire(uid: string, bucket: R2Bucket, allowAlbumClosure = false, code?: string) {
+    const user = userKey(uid)
     const membershipPath = 'family_memberships/' + user
-    const family = await this.transaction(async tx => {
-      const existing = await this.get(marker, tx)
-      if (existing) return { result: string(existing, 'family') ?? '', writes: [] }
+    const codeIndex = 'account_deletion_codes/' + user
+    const { family, closesAlbum, marker, cursor, nickname } = await this.transaction(async tx => {
+      if (code && string(await this.get(codeIndex, tx), 'hash') !== await digest(code)) {
+        throw new HttpError(404, 'deletion code unavailable')
+      }
+      const { path: marker, existing } = await this.retirementMarker(uid, tx)
+      if (existing) return { result: { family: string(existing, 'family') ?? '', marker,
+        closesAlbum: existing.fields?.closesAlbum?.booleanValue === true,
+        cursor: string(existing, 'cursor') ?? '', nickname: string(existing, 'nickname') }, writes: [] }
       const id = string(await this.get(membershipPath, tx), 'familyId') ?? ''
-      const writes: Write[] = [this.write(marker, { family: s(id) }, true)]
+      const closesAlbum = id ? await this.closesAlbum(uid, id, tx) : false
+      if (closesAlbum && !allowAlbumClosure) throw new HttpError(409, 'confirm album closure')
+      const nickname = string(await this.get('profiles/' + user, tx), 'name')
+      const writes: Write[] = [this.write(marker, { family: s(id), closesAlbum: { booleanValue: closesAlbum },
+        ...(nickname ? { nickname: s(nickname) } : {}),
+      }, true)]
       if (id) {
         const familyPath = 'families/' + id
         const memberPath = familyPath + '/members/' + user
         const member = await this.get(memberPath, tx)
-        if (this.familyMember(member)?.role === 'admin') {
-          let anotherAdmin = false
+        const family = await this.get(familyPath, tx)
+        if (closesAlbum) {
+          // Remove the album name to close outstanding invitations in the same transaction.
+          writes.push(this.write(familyPath, { closed: flags }))
           for await (const candidate of this.documents(familyPath + '/members', tx)) {
-            if (idOf(candidate) !== user && this.familyMember(candidate)?.role === 'admin') {
-              anotherAdmin = true
-              break
+            const key = idOf(candidate)
+            if (this.familyMember(candidate)) {
+              writes.push(this.remove('family_memberships/' + key))
+              writes.push(this.write(familyPath + '/members/' + key, { active: { booleanValue: false } }))
+              const used = string(candidate, 'joinedVia')
+              if (used) writes.push(this.remove('family_invites/' + used))
             }
           }
-          if (!anotherAdmin) throw new HttpError(409, 'another administrator required')
+        } else {
+          if (family && this.familyMember(member)) {
+            const count = integer(family, 'memberCount')
+            if (!Number.isSafeInteger(count) || count <= 1) throw new HttpError(503, 'member count invalid')
+            writes.push(this.write(familyPath, { ...family.fields, memberCount: n(count - 1) }))
+          }
+          const usedInvite = string(member, 'joinedVia')
+          if (usedInvite) writes.push(this.remove('family_invites/' + usedInvite))
+          if (member) writes.push(this.write(memberPath, { active: { booleanValue: false } }))
+          writes.push(this.remove(membershipPath))
         }
-        const family = await this.get(familyPath, tx)
-        if (family && this.familyMember(member)) {
-          const count = integer(family, 'memberCount')
-          if (!Number.isSafeInteger(count) || count <= 1) throw new HttpError(503, 'member count invalid')
-          writes.push(this.write(familyPath, { ...family.fields, memberCount: n(count - 1) }))
-        }
-        const usedInvite = string(member, 'joinedVia')
-        if (usedInvite) writes.push(this.remove('family_invites/' + usedInvite))
-        if (member) writes.push(this.write(memberPath, { active: { booleanValue: false } }))
-        writes.push(this.remove(membershipPath))
       }
       writes.push(this.remove('profiles/' + user))
-      return { result: id, writes }
+      return { result: { family: id, closesAlbum, marker, cursor: '', nickname }, writes }
     })
-    if (!family) return
+    if (family) {
+      const next = await this.eraseRetiredPosts(family, user, closesAlbum, bucket, cursor)
+      if (!next) await this.eraseRetiredAlbumData(family, user, closesAlbum, nickname)
+      const advanced = await this.transaction(async tx => {
+        const current = await this.get(marker, tx)
+        if (string(current, 'family') !== family || (string(current, 'cursor') ?? '') !== cursor) {
+          return { result: false, writes: [] }
+        }
+        return { result: true, writes: [this.write(marker, {
+          closesAlbum: { booleanValue: closesAlbum },
+          ...(next ? { family: s(family), cursor: s(next), ...(nickname ? { nickname: s(nickname) } : {}) } : {}),
+        })] }
+      })
+      if (!advanced || next) return false
+    }
+    await this.forgetFirebaseUser(uid)
+    await this.transaction(async tx => {
+      const hash = string(await this.get(codeIndex, tx), 'hash')
+      return { result: undefined, writes: [
+        ...(hash ? [this.remove('deletion_codes/' + hash), this.remove(codeIndex)] : []),
+        this.write(marker, { complete: flags }),
+      ] }
+    })
+    return true
+  }
+
+  private async eraseRetiredPosts(family: string, user: string, closesAlbum: boolean, bucket: R2Bucket, cursor: string) {
     const familyPath = 'families/' + family
-    for await (const doc of this.documents(familyPath + '/timeline')) {
+    // Keep deletion resumable within the Worker's per-request subrequest budget.
+    const page = await this.listPage(familyPath + '/timeline', cursor, '__name__ asc', 2)
+    for (const doc of page.documents ?? []) {
       const id = idOf(doc)
       const path = familyPath + '/timeline/' + id
-      if (string(doc, 'author') === user) {
+      if (closesAlbum || string(doc, 'author') === user) {
         await this.transaction(async tx => {
           const fresh = await this.get(path, tx)
           return { result: undefined, writes: fresh ? [await this.markDeleting(path, fresh, tx)] : [] }
@@ -641,10 +800,37 @@ export class FamilyContent extends Firestore {
         }
       }
     }
-    const memberPath = familyPath + '/members/' + user
-    for await (const notice of this.documents(memberPath + '/notices')) {
-      await this.send('commit', { writes: [{ delete: notice.name }] })
+    return page.nextPageToken
+  }
+
+  private async eraseRetiredAlbumData(family: string, user: string, closesAlbum: boolean, nickname?: string) {
+    const familyPath = 'families/' + family
+    const members = familyPath + '/members'
+    for await (const member of this.documents(members)) {
+      const path = members + '/' + idOf(member)
+      if (closesAlbum || idOf(member) === user) {
+        await this.clearCollection(path + '/notices')
+        await this.send('commit', { writes: [this.remove(path)] })
+      } else {
+        const writes: Write[] = []
+        for await (const notice of this.documents(path + '/notices')) {
+          const actorId = string(notice, 'actorId')
+          if (actorId === user || idOf(notice).endsWith('-join-' + user)) {
+            writes.push({ delete: notice.name })
+          } else if (!actorId && nickname && string(notice, 'actor') === nickname) {
+            // Older notifications only stored the display name.
+            writes.push(this.write(path + '/notices/' + idOf(notice), { ...notice.fields, actor: s('家族のメンバー') }))
+          }
+          if (writes.length === 100) await this.send('commit', { writes: writes.splice(0) })
+        }
+        if (writes.length) await this.send('commit', { writes })
+      }
     }
-    await this.send('commit', { writes: [this.remove(memberPath), this.write(marker, { family: s(''), complete: flags })] })
+    await this.clearInvites(family, closesAlbum ? undefined : user)
+    if (closesAlbum) {
+      await this.clearCollection(familyPath + '/children')
+      await this.clearCollection(familyPath + '/quota')
+      await this.send('commit', { writes: [this.remove(familyPath)] })
+    }
   }
 }

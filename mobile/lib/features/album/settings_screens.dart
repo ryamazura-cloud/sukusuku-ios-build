@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
@@ -11,120 +10,6 @@ import '../notifications/probe.dart';
 import 'album_api.dart';
 import 'album_widgets.dart';
 import 'post_screen.dart';
-
-class AccountScreen extends StatefulWidget {
-  const AccountScreen(this.api, this.user, {super.key});
-  final FamilyApi api;
-  final User user;
-  @override
-  State<AccountScreen> createState() => _AccountScreenState();
-}
-
-class _AccountScreenState extends State<AccountScreen> {
-  late Future<AlbumRow> profile = widget.api.request('profile');
-  bool busy = false;
-
-  Future<void> run(Future<void> Function() task) async {
-    setState(() => busy = true);
-    try {
-      await task();
-    } on FirebaseAuthException catch (error) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('認証を完了できませんでした（${error.code}）。')),
-        );
-      }
-    } catch (failure) {
-      if (mounted) showFailure(context, failure);
-    } finally {
-      if (mounted) setState(() => busy = false);
-    }
-  }
-
-  Future<void> retire() async {
-    if (!await confirm(
-          context,
-          'アカウントを削除',
-          '本人の投稿・写真・動画・コメントを削除します。管理者が1人の場合は、先にパートナーを招待してください。',
-        ) ||
-        !mounted) {
-      return;
-    }
-    final password = await textDialog(
-      context,
-      '本人確認',
-      label: 'パスワード',
-      secret: true,
-      maxLength: 200,
-    );
-    final email = widget.user.email;
-    if (password == null || email == null || !mounted) return;
-    await run(() async {
-      final user = widget.user;
-      await user.reauthenticateWithCredential(
-        EmailAuthProvider.credential(email: email, password: password),
-      );
-      await user.getIdToken(true);
-      await widget.api.request('account', method: 'DELETE');
-      await user.delete();
-      if (mounted) Navigator.pop(context);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('アカウント設定')),
-    body: ListView(
-      padding: const EdgeInsets.all(20),
-      children: [
-        Text(widget.user.email ?? ''),
-        FutureBuilder(
-          future: profile,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const LinearProgressIndicator();
-            }
-            if (snapshot.hasError) return Text(errorLabel(snapshot.error));
-            final name = snapshot.data?['name'] as String? ?? '';
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('表示名'),
-              subtitle: Text(name.isEmpty ? '未設定' : name),
-              onTap: busy
-                  ? null
-                  : () async {
-                      final value = await textDialog(
-                        context,
-                        '表示名を編集',
-                        label: '表示名',
-                        initial: name,
-                      );
-                      if (value == null || value.trim().isEmpty || !mounted) {
-                        return;
-                      }
-                      await run(() async {
-                        final saved = await widget.api.request(
-                          'profile',
-                          method: 'PUT',
-                          body: {'name': value},
-                        );
-                        if (mounted) {
-                          setState(() => profile = Future.value(saved));
-                        }
-                      });
-                    },
-            );
-          },
-        ),
-        TextButton(
-          onPressed: busy ? null : retire,
-          child: const Text('アカウントを削除'),
-        ),
-        if (busy) const LinearProgressIndicator(),
-      ],
-    ),
-  );
-}
 
 class ChildScreen extends StatefulWidget {
   const ChildScreen(this.api, {super.key});
@@ -425,8 +310,9 @@ IconData _noticeIcon(Object? kind) => switch (kind) {
 };
 
 class NoticesScreen extends StatefulWidget {
-  const NoticesScreen(this.api, {super.key});
+  const NoticesScreen(this.api, {super.key, this.openSettings = false});
   final AlbumApi api;
+  final bool openSettings;
   @override
   State<NoticesScreen> createState() => _NoticesScreenState();
 }
@@ -441,6 +327,33 @@ class _NoticesScreenState extends State<NoticesScreen> {
     more.clear();
     page = null;
   });
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.openSettings) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) settings();
+      });
+    }
+  }
+
+  Future<void> testNotification() async {
+    if (busy) return;
+    setState(() => busy = true);
+    try {
+      final token = await NotificationProbe().existingToken();
+      if (token == null) {
+        throw StateError('端末の設定ですくすくの通知を許可してください。');
+      }
+      await widget.api.change('notification-settings', 'PUT', {'fid': token});
+      await widget.api.change('notification-test', 'POST');
+    } catch (failure) {
+      if (mounted) showFailure(context, failure);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
 
   Future<void> settings() async {
     try {
@@ -484,6 +397,15 @@ class _NoticesScreenState extends State<NoticesScreen> {
                 onPressed: () => Navigator.pop(context),
                 child: const Text('取り消す'),
               ),
+              TextButton(
+                onPressed: push && current['enabled'] == true
+                    ? () {
+                        Navigator.pop(context, false);
+                        testNotification();
+                      }
+                    : null,
+                child: const Text('テスト通知を送る'),
+              ),
               FilledButton(
                 onPressed: () => Navigator.pop(context, true),
                 child: const Text('保存'),
@@ -495,7 +417,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
       if (changed != true || !mounted) return;
       final token = push ? await NotificationProbe().token() : '';
       await widget.api.change('notification-settings', 'PUT', {
-        'token': token,
+        'fid': token,
         'preferences': preferences.toList(),
       });
       if (mounted) reload();

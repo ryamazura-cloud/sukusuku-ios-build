@@ -160,6 +160,21 @@ class FamilyApi {
     return decoded;
   }
 
+  Future<void> deleteAccount({bool closesAlbum = false}) async {
+    while (true) {
+      final result = await request(
+        'account',
+        method: 'DELETE',
+        body: {'closeAlbum': closesAlbum},
+      );
+      if (result['ok'] == true) return;
+      if (result['pending'] != true) {
+        throw const FormatException('Missing account deletion acknowledgement');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
+
   Future<void> upload(String path, Uint8List bytes, String mime) async {
     await _send(path, 'PUT', bytes: bytes, contentType: mime);
   }
@@ -209,7 +224,23 @@ class FamilyApiException implements Exception {
   final String? reason;
 
   String get message => switch ((status, reason)) {
-    (400, 'relationship does not match invitation') => '招待内容に合う立場を選んでください。',
+    (400, 'relationship does not match invitation') => '招待内容に合う間柄を選んでください。',
+    (409, 'notification device not registered') => '先に端末への通知をオンにして保存してください。',
+    (429, 'notification test rate limited') => 'テスト通知は30秒後にもう一度送れます。',
+    (503, 'notification delivery THIRD_PARTY_AUTH_ERROR') =>
+      'iPhoneへの通知の認証に失敗しました。FirebaseのAPNs設定をご確認ください。',
+    (503, 'notification delivery PERMISSION_DENIED') =>
+      '通知サーバーの送信権限を確認してください（PERMISSION_DENIED）。',
+    (503, 'notification delivery SENDER_ID_MISMATCH') =>
+      '端末と通知サーバーのFirebaseプロジェクトが一致していません。',
+    (503, 'notification delivery UNREGISTERED') =>
+      '端末の登録情報が無効です。通知をオンにして保存し直してください。',
+    (503, final reason?) when reason.startsWith('notification delivery ') =>
+      'テスト通知を送信できませんでした（${reason.split(' ').last}）。',
+    (409, 'confirm album closure') =>
+      '管理者の状況が変わりました。もう一度削除ボタンを押し、削除される内容を確認してください。',
+    (503, 'Firebase account deletion unavailable') =>
+      '認証データの削除を完了できませんでした。少し時間をおいて再試行してください。',
     (409, 'another administrator required') ||
     (
       409,
@@ -218,7 +249,7 @@ class FamilyApiException implements Exception {
     (409, 'upload is being processed') => '前回のアップロードを処理中です。少し待って再試行してください。',
     (409, 'upload in progress; retry deletion later') =>
       'アップロードの終了後に、もう一度削除してください。',
-    (403, 'account retirement in progress') => '退会手続き中です。アカウント設定から退会を再開してください。',
+    (403, 'account retirement in progress') => 'アカウントとデータの削除が途中です。',
     (413, _) => 'ファイルが大きすぎるか、家族の容量上限に達しています。',
     (422, _) => '対応している写真、または60秒以下の動画を選んでください。',
     (400, _) => '入力内容を確認してください。',

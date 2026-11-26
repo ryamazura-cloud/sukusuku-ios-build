@@ -4,7 +4,7 @@ export const MAX_MONTH = 300_000_000
 export const MAX_VIDEO_MS = 60_000
 
 export class HttpError extends Error {
-  readonly status: 400 | 401 | 403 | 404 | 409 | 411 | 413 | 415 | 422 | 503
+  readonly status: 400 | 401 | 403 | 404 | 409 | 411 | 413 | 415 | 422 | 429 | 503
   constructor(status: HttpError['status'], message: string) {
     super(message)
     this.status = status

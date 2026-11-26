@@ -22,5 +22,5 @@ export default createApp({
   store,
   families: store,
   content: store,
-  recentUid: (header, project) => verifier.uid(header, project, undefined, 300),
+  recentUid: (header, project) => verifier.uid(header, project, undefined, 300, true),
 })
