@@ -5,9 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import 'app/config.dart';
 import 'app/theme.dart';
-import 'features/auth/auth.dart';
-import 'features/auth/sign_in.dart';
-import 'features/media/probe_screen.dart';
+import 'features/family/album_entry.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,7 +16,7 @@ Future<void> main() async {
     return;
   }
   if (config.environment != 'dev') {
-    runApp(const SetupMessage('Phase 0の検証画面は開発環境で利用できます。'));
+    runApp(const SetupMessage('このビルドは開発環境で利用できます。'));
     return;
   }
   try {
@@ -50,45 +48,20 @@ class SetupMessage extends StatelessWidget {
 }
 
 final routerProvider = Provider.family<GoRouter, AppConfig>((ref, config) {
-  final changed = ValueNotifier(0);
-  ref.listen(userProvider, (_, _) => changed.value++);
   final router = GoRouter(
-    initialLocation: '/',
-    refreshListenable: changed,
-    redirect: (_, state) {
-      final user = ref.read(userProvider);
-      if (user.isLoading || user.hasError)
-        return state.uri.path == '/' ? null : '/';
-      final destination = user.value == null ? '/login' : '/probe';
-      return state.uri.path == destination ? null : destination;
-    },
     routes: [
+      GoRoute(path: '/', builder: (_, _) => AlbumEntry(config.api)),
       GoRoute(
-        path: '/',
-        builder: (_, _) => Scaffold(
-          body: Center(
-            child: Consumer(
-              builder: (_, ref, _) {
-                final user = ref.watch(userProvider);
-                return user.hasError
-                    ? FilledButton(
-                        onPressed: () => ref.invalidate(userProvider),
-                        child: const Text('認証接続を再試行'),
-                      )
-                    : const CircularProgressIndicator();
-              },
-            ),
-          ),
+        path: '/invite/:code',
+        builder: (_, state) => AlbumEntry(
+          config.api,
+          key: ValueKey(state.pathParameters['code']),
+          code: state.pathParameters['code'],
         ),
       ),
-      GoRoute(path: '/login', builder: (_, _) => const SignIn()),
-      GoRoute(path: '/probe', builder: (_, _) => ProbeScreen(config.api)),
     ],
   );
-  ref.onDispose(() {
-    router.dispose();
-    changed.dispose();
-  });
+  ref.onDispose(router.dispose);
   return router;
 });
 
@@ -98,7 +71,7 @@ class FamilyApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
-    title: '家族共有',
+    title: 'すくすく',
     theme: familyTheme(),
     routerConfig: ref.watch(routerProvider(config)),
   );

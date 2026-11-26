@@ -74,3 +74,18 @@ test('accepts Android-style extended mdat and still enforces duration and box bo
     assert.throws(() => validateMedia(file, 'video/mp4'), { status: 422 })
   }
 })
+
+test('publishing MP4 clears standard metadata without moving media offsets', () => {
+  const clip = new Uint8Array(mp4(2000))
+  const location = Buffer.from('private location metadata')
+  const extra = Buffer.alloc(8 + location.length)
+  extra.writeUInt32BE(extra.length)
+  extra.write('udta', 4, 'ascii')
+  location.copy(extra, 8)
+  const full = Uint8Array.from(Buffer.concat([clip, extra]))
+  validateMedia(full.buffer, 'video/mp4', true)
+  assert.deepEqual(full.subarray(0, clip.length), clip)
+  assert.equal(Buffer.from(full.subarray(clip.length + 4, clip.length + 8)).toString(), 'free')
+  assert.ok(full.subarray(clip.length + 8).every(byte => byte === 0))
+  assert.doesNotThrow(() => validateMedia(full.buffer, 'video/mp4'))
+})

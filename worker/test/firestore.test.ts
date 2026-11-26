@@ -57,3 +57,51 @@ test('inactive or unrelated membership denies reads before fetching post or medi
   await assert.rejects(store.read({ family: 'phase0', post: 'family', uid: 'unrelated' }, 'test'), { status: 403 })
   assert.equal(calls, 1)
 })
+
+test('creates a family and grants only the invited role once', async () => {
+  const documents = new Map<string, { fields: Record<string, unknown> }>()
+  const store = new Firestore('fixture', { token: async () => 'mock' }, async (input, init) => {
+    const url = new URL(String(input))
+    if (url.pathname.endsWith(':beginTransaction')) return Response.json({ transaction: 'tx' })
+    if (url.pathname.endsWith(':rollback')) return Response.json({})
+    if (url.pathname.endsWith(':commit')) {
+      const { writes } = JSON.parse(String(init?.body))
+      for (const write of writes) {
+        if (write.currentDocument?.exists === false && documents.has(write.update.name)) {
+          return Response.json({ error: { status: 'ALREADY_EXISTS' } }, { status: 409 })
+        }
+      }
+      for (const write of writes) documents.set(write.update.name, write.update)
+      return Response.json({})
+    }
+    const doc = documents.get(url.pathname.slice('/v1/'.length))
+    return doc ? Response.json(doc) : Response.json({}, { status: 404 })
+  })
+  assert.equal(await store.membership('owner'), null)
+  const family = await store.createFamily('owner', 'すくすく家')
+  assert.deepEqual(await store.membership('owner'), family)
+  assert.equal(family.role, 'admin')
+  await assert.rejects(store.createFamily('owner', '二つ目'), { status: 409 })
+  await assert.rejects(store.createInvite('outside', family.id, 'parent'), { status: 403 })
+
+  const fatherSide = await store.createInvite('owner', family.id, 'paternal')
+  assert.match(fatherSide.code, /^[0-9a-f]{32}$/)
+  const viewer = await store.joinFamily('viewer', fatherSide.code)
+  assert.deepEqual(viewer, { ...family, role: 'grandparent', side: 'paternal' })
+  assert.deepEqual(await store.membership('viewer'), viewer)
+  assert.deepEqual(await store.joinFamily('viewer', fatherSide.code), viewer)
+  await assert.rejects(store.joinFamily('outside', fatherSide.code), { status: 404 })
+  await assert.rejects(store.createInvite('viewer', family.id, 'parent'), { status: 403 })
+
+  const otherParent = await store.createInvite('owner', family.id, 'parent')
+  await assert.rejects(store.joinFamily('viewer', otherParent.code), { status: 409 })
+  assert.deepEqual(await store.joinFamily('parent', otherParent.code), { ...family, role: 'parent' })
+  await assert.rejects(store.createInvite('parent', family.id, 'maternal'), { status: 403 })
+
+  const expired = await store.createInvite('owner', family.id, 'maternal')
+  const invite = documents.get('projects/fixture/databases/(default)/documents/family_invites/' + expired.code)
+  assert.ok(invite)
+  invite.fields.expiresAt = { stringValue: '2000-01-01T00:00:00.000Z' }
+  await assert.rejects(store.joinFamily('outside', expired.code), { status: 404 })
+  assert.equal(await store.membership('outside'), null)
+})

@@ -1,11 +1,11 @@
-name: Phase 0 iPhone TestFlight
+name: iPhone TestFlight
 on:
   workflow_dispatch:
     inputs:
       build_number:
         description: App Store Connect build number (increase for every upload)
         required: true
-        default: '1'
+        default: '2'
 permissions:
   contents: read
 concurrency:
@@ -68,7 +68,7 @@ jobs:
 
           temp = pathlib.Path(os.environ["RUNNER_TEMP"])
           config = json.loads((temp / "family-ios-dev.json").read_text(encoding="utf-8-sig"))
-          assert config["APP_ENV"] == "dev", "Phase 0 must use the dev environment"
+          assert config["APP_ENV"] == "dev", "TestFlight must use the dev environment"
           assert config["FIREBASE_PROJECT_ID"] == "photoshare-e1336", "Unexpected Firebase project"
           assert ":ios:" in config["FIREBASE_IOS_APP_ID"], "iOS Firebase App ID required"
           assert config["FIREBASE_IOS_API_KEY"] and "REPLACE" not in config["FIREBASE_IOS_API_KEY"], "iOS API key required"
@@ -86,6 +86,7 @@ jobs:
           assert team in profile["TeamIdentifier"], "Provisioning team mismatch"
           assert entitlements["application-identifier"].split(".", 1)[1] == bundle, "Provisioning Bundle ID mismatch"
           assert entitlements.get("aps-environment") == "production", "Enable Push Notifications and regenerate the profile"
+          assert entitlements.get("com.apple.developer.associated-domains"), "Enable Associated Domains and regenerate the profile"
           assert not entitlements.get("get-task-allow") and "ProvisionedDevices" not in profile and not profile.get("ProvisionsAllDevices"), "App Store Connect profile required"
           for relative in ("Library/Developer/Xcode/UserData/Provisioning Profiles", "Library/MobileDevice/Provisioning Profiles"):
               destination = pathlib.Path.home() / relative
@@ -147,6 +148,15 @@ jobs:
             echo "::error::The signed app must have the production APNs entitlement"
             exit 1
           fi
+          [[ "$(plutil -extract CFBundleIdentifier raw -o - "${bundles[0]}/Info.plist")" == biz.wisemap.familyShare ]]
+          [[ "$(plutil -extract CFBundleVersion raw -o - "${bundles[0]}/Info.plist")" == "$BUILD_NUMBER" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains:0' "$entitlements")" == applinks:family-share-dev.wisemap.workers.dev ]]
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sukusuku-testflight-${{ inputs.build_number }}
+          path: mobile/build/ios/ipa/*.ipa
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload to App Store Connect
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}

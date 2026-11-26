@@ -13,6 +13,7 @@ test('Hono upload round trip requires authorization and hides unfinished objects
     get() { return blob && { body: blob, size: blob.length } },
   } } as Bindings
   const app = createApp({
+    families: () => { throw new Error('family store not used by fixture routes') },
     uid: async header => {
       if (!header) throw new HttpError(401, 'unauthenticated')
       return header
@@ -59,4 +60,86 @@ test('Hono upload round trip requires authorization and hides unfinished objects
   failCompletion = true
   assert.equal((await app.fetch(put(), env)).status, 503)
   assert.equal((await app.fetch(get('parent'), env)).status, 404)
+})
+
+test('family routes authenticate, validate invitation inputs, and derive the joining role server-side', async () => {
+  const id = '83b297e3-e9b2-4fdd-85c2-76ccaf8f40a1'
+  const code = '83b297e3e9b24fdd85c276ccaf8f40a1'
+  const app = createApp({
+    uid: async header => {
+      if (!header) throw new HttpError(401, 'unauthenticated')
+      return header
+    },
+    store: () => { throw new Error('fixture store not used by family routes') },
+    families: () => ({
+      async membership(uid) {
+        assert.equal(uid, 'tester')
+        return null
+      },
+      async createFamily(uid, name) {
+        assert.equal(uid, 'tester')
+        assert.equal(name, 'すくすく家')
+        return { id, name, role: 'admin' }
+      },
+      async createInvite(uid, family, role) {
+        assert.equal(uid, 'tester')
+        assert.equal(family, id)
+        assert.equal(role, 'maternal')
+        return { code, expiresAt: '2026-12-01T00:00:00.000Z' }
+      },
+      async joinFamily(uid, received) {
+        assert.equal(uid, 'tester')
+        assert.equal(received, code)
+        return { id, name: 'すくすく家', role: 'grandparent', side: 'maternal' }
+      },
+    }),
+  })
+  const env = { APP_ENV: 'dev' } as Bindings
+  const base = 'https://example.invalid/v1/families'
+  const post = (path: string, body: unknown, testEnv = env) => app.fetch(new Request(base + path, {
+    method: 'POST',
+    headers: { Authorization: 'tester', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }), testEnv)
+  const invitePath = '/' + id + '/invites'
+
+  assert.equal((await app.fetch(new Request(base + '/current'), env)).status, 401)
+  assert.equal((await post('', { name: 'すくすく家' }, { ...env, APP_ENV: 'prod' })).status, 404)
+  const current = await app.fetch(new Request(base + '/current', { headers: { Authorization: 'tester' } }), env)
+  assert.deepEqual(await current.json(), { family: null })
+  assert.equal((await post('', { name: '' })).status, 400)
+  assert.equal((await post('', { name: 'a'.repeat(1100) })).status, 413)
+  assert.equal((await post('', { name: ' すくすく家 ' })).status, 201)
+  assert.equal((await post(invitePath, { role: 'admin' })).status, 400)
+  assert.equal((await post(invitePath, { role: 'maternal' })).status, 201)
+  assert.equal((await post('/join', { code: 'invalid' })).status, 400)
+  const joined = await post('/join', { code: code.toUpperCase(), role: 'admin' })
+  assert.equal(joined.status, 200)
+  assert.deepEqual(await joined.json(), {
+    family: { id, name: 'すくすく家', role: 'grandparent', side: 'maternal' },
+  })
+})
+
+test('public invitation landing page does not expose the token or album details', async () => {
+  const app = createApp({
+    uid: async () => { throw new Error('public routes do not authenticate') },
+    store: () => { throw new Error('public routes do not read posts') },
+    families: () => { throw new Error('public routes do not read families') },
+  })
+  const cert = Array(32).fill('AF').join(':')
+  const env = { APP_ENV: 'dev', ANDROID_APP_CERTS: cert, IOS_TEAM_ID: 'ABCD123456' } as Bindings
+  const open = (path: string) => app.fetch(new Request('https://example.invalid' + path), env)
+  const code = 'a'.repeat(32)
+  const landing = await open('/invite/' + code)
+  assert.equal(landing.status, 200)
+  assert.equal(landing.headers.get('referrer-policy'), 'no-referrer')
+  assert.doesNotMatch(await landing.text(), new RegExp(code))
+  const assetlinks = await (await open('/.well-known/assetlinks.json')).json()
+  assert.deepEqual(assetlinks[0].target, {
+    namespace: 'android_app', package_name: 'biz.wisemap.family_share', sha256_cert_fingerprints: [cert],
+  })
+  const aasa = await (await open('/.well-known/apple-app-site-association')).json()
+  assert.deepEqual(aasa.applinks.details[0], {
+    appIDs: ['ABCD123456.biz.wisemap.familyShare'], components: [{ '/': '/invite/*' }],
+  })
 })

@@ -9,6 +9,8 @@ if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }
 
+val uploadKeystore = providers.environmentVariable("ANDROID_UPLOAD_KEYSTORE").orNull
+
 android {
     namespace = "biz.wisemap.family_share"
     compileSdk = flutter.compileSdkVersion
@@ -34,11 +36,20 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (uploadKeystore != null) {
+            create("playUpload") {
+                storeFile = file(uploadKeystore)
+                storePassword = providers.environmentVariable("ANDROID_UPLOAD_PASSWORD").get()
+                keyAlias = providers.environmentVariable("ANDROID_UPLOAD_ALIAS").get()
+                keyPassword = storePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("playUpload")
         }
     }
 }

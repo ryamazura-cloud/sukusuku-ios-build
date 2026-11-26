@@ -23,7 +23,32 @@ class Compression {
             source: ImageSource.gallery,
             requestFullMetadata: false,
           );
+    return picked == null ? null : compress(picked, video: video);
+  }
+
+  Future<Compressed?> pickMedia() async {
+    final picked = await ImagePicker().pickMedia();
     if (picked == null) return null;
+    final extension = picked.path.split('.').last.toLowerCase();
+    final video =
+        picked.mimeType?.startsWith('video/') == true ||
+        {
+          'mp4',
+          'mov',
+          'm4v',
+          'webm',
+          '3gp',
+          '3g2',
+          'mkv',
+          'avi',
+          'mpeg',
+          'mpg',
+          'ts',
+        }.contains(extension);
+    return compress(picked, video: video);
+  }
+
+  Future<Compressed> compress(XFile picked, {required bool video}) async {
     final original = await picked.length();
     if (!video) {
       final bytes = await FlutterImageCompress.compressWithFile(

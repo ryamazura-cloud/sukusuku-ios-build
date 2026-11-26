@@ -1,5 +1,5 @@
 name: family_share
-description: Private family media sharing Phase 0
+description: Sukusuku private family album
 publish_to: none
 version: 0.1.0+1
 environment:
@@ -16,9 +16,13 @@ dependencies:
   flutter_image_compress: 2.5.1
   video_compress: 3.1.4
   http: ^1.5.0
+  uuid: ^4.6.0
+  share_plus: ^13.3.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
 flutter:
   uses-material-design: true
+  assets:
+    - assets/welcome/

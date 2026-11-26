@@ -10,7 +10,7 @@
       "name": "family-share-dev",
       "workers_dev": true,
       "preview_urls": false,
-      "vars": {"APP_ENV":"dev","FIREBASE_PROJECT_ID":"photoshare-e1336"},
+      "vars": {"APP_ENV":"dev","FIREBASE_PROJECT_ID":"photoshare-e1336","ANDROID_APP_CERTS":"CB:16:34:C8:29:A3:EA:F1:91:B0:25:92:BB:4B:52:81:86:9F:33:90:01:3F:E8:40:04:28:05:A2:12:C4:FA:8E"},
       "r2_buckets": [{"binding":"MEDIA","bucket_name":"family-share-dev"}]
     },
     "prod": {

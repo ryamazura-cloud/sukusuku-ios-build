@@ -23,8 +23,8 @@ class _SignInState extends ConsumerState<SignIn> {
     super.dispose();
   }
 
-  Future<void> submit() async {
-    if (email.text.trim().isEmpty || password.text.isEmpty) {
+  Future<void> submit({bool register = false, bool reset = false}) async {
+    if (email.text.trim().isEmpty || (!reset && password.text.isEmpty)) {
       setState(() => error = 'メールアドレスとパスワードを入力してください。');
       return;
     }
@@ -33,14 +33,24 @@ class _SignInState extends ConsumerState<SignIn> {
       error = null;
     });
     try {
-      await ref
-          .read(authProvider)
-          .signInWithEmailAndPassword(
-            email: email.text.trim(),
-            password: password.text,
-          );
+      final auth = ref.read(authProvider);
+      final address = email.text.trim();
+      if (reset) {
+        await auth.sendPasswordResetEmail(email: address);
+        if (mounted) setState(() => error = '再設定メールをリクエストしました。');
+      } else if (register) {
+        await auth.createUserWithEmailAndPassword(
+          email: address,
+          password: password.text,
+        );
+      } else {
+        await auth.signInWithEmailAndPassword(
+          email: address,
+          password: password.text,
+        );
+      }
     } on FirebaseAuthException catch (exception) {
-      if (mounted) setState(() => error = 'ログインに失敗しました（${exception.code}）。');
+      if (mounted) setState(() => error = '認証操作に失敗しました（${exception.code}）。');
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -52,7 +62,7 @@ class _SignInState extends ConsumerState<SignIn> {
     body: ListView(
       padding: const EdgeInsets.all(24),
       children: [
-        const Text('開発用アカウントでログイン'),
+        const Text('メールアドレスでログイン'),
         const SizedBox(height: 16),
         TextField(
           controller: email,
@@ -70,6 +80,14 @@ class _SignInState extends ConsumerState<SignIn> {
         FilledButton(
           onPressed: busy ? null : submit,
           child: const Text('ログイン'),
+        ),
+        OutlinedButton(
+          onPressed: busy ? null : () => submit(register: true),
+          child: const Text('アカウントを作成'),
+        ),
+        TextButton(
+          onPressed: busy ? null : () => submit(reset: true),
+          child: const Text('パスワードを再設定'),
         ),
       ],
     ),

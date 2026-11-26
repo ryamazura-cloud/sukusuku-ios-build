@@ -1,6 +1,10 @@
-import { Hono } from 'hono'
-import { HttpError, MAX_UPLOAD, validateMedia } from './domain.ts'
-import type { Store } from './firestore.ts'
+import { Hono, type MiddlewareHandler } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { HttpError, MAX_UPLOAD, inviteRoles, type InviteRole, validateMedia } from './domain.ts'
+import { registerInviteLinks } from './invite_links.ts'
+import type { FamilyStore, Store, JoinProfile, ParentRelationship } from './firestore.ts'
+import type { FamilyContent } from './family_content.ts'
+import { registerContent } from './content_routes.ts'
 
 export type Bindings = {
   APP_ENV: string
@@ -8,14 +12,49 @@ export type Bindings = {
   GOOGLE_CLIENT_EMAIL: string
   GOOGLE_PRIVATE_KEY: string
   MEDIA: R2Bucket
+  ANDROID_APP_CERTS?: string
+  IOS_TEAM_ID?: string
+  ANDROID_STORE_URL?: string
+  IOS_STORE_URL?: string
 }
 type Dependencies = {
   uid: (header: string | undefined, project: string) => Promise<string>
   store: (env: Bindings) => Store
+  families: (env: Bindings) => FamilyStore
+  content?: (env: Bindings) => FamilyContent
+  recentUid?: Dependencies['uid']
 }
+export type AppEnv = { Bindings: Bindings; Variables: { uid: string } }
 const noCache = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' }
 const idPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
 const uploadId = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const inviteCode = /^[0-9a-f]{32}$/
+
+const parentLabels = ['father', 'mother']
+const relativeLabels = ['grandfather', 'grandmother', 'sibling', 'other']
+
+function nickname(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > 60 ||
+      /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, 'invalid nickname')
+  return value.trim()
+}
+
+function birthday(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+      !Number.isFinite(Date.parse(value)) || new Date(value).toISOString().slice(0, 10) !== value ||
+      value < '1900-01-01') {
+    throw new HttpError(400, 'invalid birthday')
+  }
+  return value
+}
+
+async function jsonRecord(request: Request): Promise<Record<string, unknown>> {
+  const input: unknown = await request.json().catch(() => null)
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new HttpError(400, 'invalid JSON body')
+  }
+  return input as Record<string, unknown>
+}
 
 // Bound actual bytes even when the declared length is incorrect.
 async function readBody(body: ReadableStream<Uint8Array> | null, size: number) {
@@ -40,7 +79,7 @@ async function readBody(body: ReadableStream<Uint8Array> | null, size: number) {
 }
 
 export function createApp(dependencies: Dependencies) {
-  const app = new Hono<{ Bindings: Bindings; Variables: { uid: string } }>()
+  const app = new Hono<AppEnv>()
   app.onError((error, c) => {
     if (error instanceof HttpError) {
       if (error.status === 413 && c.req.path.startsWith('/v0/families/phase0-quota/')) {
@@ -50,12 +89,70 @@ export function createApp(dependencies: Dependencies) {
     }
     return c.json({ error: 'service unavailable' }, 503, noCache)
   })
+  registerInviteLinks(app)
   app.get('/health', c => c.json({ status: 'ok' }, 200, noCache))
 
-  app.use('/v0/*', async (c, next) => {
+  const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (c.env.APP_ENV !== 'dev') throw new HttpError(404, 'route disabled')
     c.set('uid', await dependencies.uid(c.req.header('Authorization'), c.env.FIREBASE_PROJECT_ID))
     await next()
+  }
+  app.use('/v0/*', authenticate)
+  app.use('/v1/*', authenticate)
+  if (dependencies.content && dependencies.recentUid) {
+    registerContent(app, dependencies.content, dependencies.recentUid, jsonRecord, readBody)
+  }
+  const smallBody = bodyLimit({
+    maxSize: 1024,
+    onError: () => { throw new HttpError(413, 'request too large') },
+  })
+  app.get('/v1/families/current', async c => {
+    const family = await dependencies.families(c.env).membership(c.get('uid'))
+    return c.json({ family }, 200, noCache)
+  })
+  app.post('/v1/families', smallBody, async c => {
+    const { name, relationship, nickname: memberName, childName, birthday: birth } = await jsonRecord(c.req.raw)
+    const normalized = typeof name === 'string' ? name.trim() : ''
+    if (!normalized || normalized.length > 60 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+      throw new HttpError(400, 'invalid family name')
+    }
+    const hasProfile = [relationship, memberName, childName, birth].some(value => value !== undefined)
+    if (hasProfile && (typeof relationship !== 'string' || !parentLabels.includes(relationship))) {
+      throw new HttpError(400, 'invalid parent relationship')
+    }
+    const profile = hasProfile ? { relationship: relationship as ParentRelationship,
+      nickname: nickname(memberName), childName: nickname(childName), birthday: birthday(birth) } : undefined
+    const family = await dependencies.families(c.env).createFamily(c.get('uid'), normalized, profile)
+    return c.json({ family }, 201, noCache)
+  })
+  app.post('/v1/families/:id/invites', smallBody, async c => {
+    const { role } = await jsonRecord(c.req.raw)
+    const family = c.req.param('id')
+    if (!uploadId.test(family) || !inviteRoles.includes(role as InviteRole)) {
+      throw new HttpError(400, 'invalid family or invite role')
+    }
+    const invite = await dependencies.families(c.env).createInvite(c.get('uid'), family, role as InviteRole)
+    return c.json(invite, 201, noCache)
+  })
+  app.post('/v1/families/invite-details', smallBody, async c => {
+    const { code } = await jsonRecord(c.req.raw)
+    if (typeof code !== 'string' || !inviteCode.test(code)) throw new HttpError(400, 'invalid invite code')
+    const store = dependencies.families(c.env)
+    if (!store.inviteType) throw new HttpError(503, 'invite details unavailable')
+    return c.json({ type: await store.inviteType(c.get('uid'), code) }, 200, noCache)
+  })
+  app.post('/v1/families/join', smallBody, async c => {
+    const { code, relationship, nickname: memberName } = await jsonRecord(c.req.raw)
+    const normalized = typeof code === 'string' ? code.trim().toLowerCase() : ''
+    if (!inviteCode.test(normalized)) throw new HttpError(400, 'invalid invite code')
+    const hasProfile = relationship !== undefined || memberName !== undefined
+    if (hasProfile && (typeof relationship !== 'string' || ![...parentLabels, ...relativeLabels].includes(relationship))) {
+      throw new HttpError(400, 'invalid relationship')
+    }
+    const profile = hasProfile ? { relationship: relationship as JoinProfile['relationship'],
+      nickname: nickname(memberName) } : undefined
+    const family = await dependencies.families(c.env).joinFamily(c.get('uid'), normalized, profile)
+    return c.json({ family }, 200, noCache)
   })
   app.get('/v0/me', c => c.json({ uid: c.get('uid') }, 200, noCache))
   const route = '/v0/families/:family/posts/:post/media/:id'

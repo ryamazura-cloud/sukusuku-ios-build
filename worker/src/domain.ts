@@ -15,6 +15,11 @@ export type Scope = 'parents' | 'all' | 'paternal' | 'maternal'
 export type Member = { role: 'parent' | 'admin' | 'grandparent'; side?: 'paternal' | 'maternal' }
 export type MediaType = 'image/jpeg' | 'video/mp4'
 
+export const inviteRoles = ['parent', 'paternal', 'maternal'] as const
+export type InviteRole = typeof inviteRoles[number]
+export type FamilyMembership = Member & { id: string; name: string; relationship?: string }
+export type FamilyInvite = { code: string; expiresAt: string }
+
 export function mayPost(member: Member | null) {
   return member?.role === 'parent' || member?.role === 'admin'
 }
@@ -38,7 +43,7 @@ export function reserveBytes(total: number, month: number, bytes: number) {
   return { total: total + bytes, month: month + bytes }
 }
 
-export function validateMedia(buffer: ArrayBuffer, type: MediaType) {
+export function validateMedia(buffer: ArrayBuffer, type: MediaType, stripMetadata = false) {
   const bytes = new Uint8Array(buffer)
   if (type === 'image/jpeg') {
     if (bytes.length < 4 || bytes[0] !== 255 || bytes[1] !== 216 ||
@@ -50,7 +55,7 @@ export function validateMedia(buffer: ArrayBuffer, type: MediaType) {
   const view = new DataView(buffer)
   // The development spike accepts regular, non-fragmented MP4 only.
   function boxes(start: number, end: number) {
-    const result: { type: string; body: number; end: number }[] = []
+    const result: { type: string; start: number; body: number; end: number }[] = []
     while (start + 8 <= end && result.length < 512) {
       const sizeField = view.getUint32(start)
       const type = String.fromCharCode(...bytes.subarray(start + 4, start + 8))
@@ -68,7 +73,7 @@ export function validateMedia(buffer: ArrayBuffer, type: MediaType) {
         size = remaining
       }
       if (size < headerBytes || size > remaining) break
-      result.push({ type, body: start + headerBytes, end: start + size })
+      result.push({ type, start, body: start + headerBytes, end: start + size })
       start += size
     }
     if (start !== end) throw new HttpError(422, 'invalid MP4 boxes')
@@ -89,5 +94,18 @@ export function validateMedia(buffer: ArrayBuffer, type: MediaType) {
   const duration = version === 0 ? BigInt(view.getUint32(offset + 4)) : view.getBigUint64(offset + 4)
   if (scale === 0 || duration === 0n || duration * 1000n > BigInt(scale) * BigInt(MAX_VIDEO_MS)) {
     throw new HttpError(422, 'video must be at most 60 seconds')
+  }
+  if (stripMetadata) {
+    function clearMetadata(entries: ReturnType<typeof boxes>) {
+      for (const entry of entries) {
+        if (['udta', 'meta', 'loci', '\u00a9xyz'].includes(entry.type)) {
+          bytes.set([102, 114, 101, 101], entry.start + 4) // free
+          bytes.fill(0, entry.body, entry.end)
+        } else if (entry.type === 'moov' || entry.type === 'trak' || entry.type === 'mdia') {
+          clearMetadata(boxes(entry.body, entry.end))
+        }
+      }
+    }
+    clearMetadata(top)
   }
 }

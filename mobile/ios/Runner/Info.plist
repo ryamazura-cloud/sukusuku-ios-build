@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>検証用の画像と動画を写真ライブラリから選びます。</string>
+	<string>家族のアルバムに投稿する写真と動画を選びます。</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
@@ -14,7 +14,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Family Share</string>
+	<string>すくすく</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
