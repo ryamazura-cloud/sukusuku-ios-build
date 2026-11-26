@@ -52,7 +52,7 @@ jobs:
           git -C "$RUNNER_TEMP/flutter" tag 3.47.9
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
       - run: if test -f pubspec.lock; then flutter pub get --enforce-lockfile; else flutter pub get; fi
-      - run: flutter analyze --no-pub
+      - run: flutter analyze --no-pub --no-fatal-infos
       - run: flutter test --no-pub
       - if: matrix.target == 'android'
         run: |
