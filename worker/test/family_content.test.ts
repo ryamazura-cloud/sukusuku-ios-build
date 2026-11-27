@@ -10,7 +10,7 @@ test('family content stays private, supports discussion, and purges only the ret
   const files = new Map()
   const removedAccounts = new Set<string>()
   let firebaseDeleteAvailable = true
-  const pushes: { token: string; android: { notification: { channel_id: string } }; apns: { payload: { aps: { sound: string } } } }[] = []
+  const pushes: { token: string; notification: { body: string }; data: Record<string, string>; android: { notification: { channel_id: string } }; apns: { payload: { aps: { sound: string } } } }[] = []
   const root = 'projects/fixture/databases/(default)/documents'
   const db = new FamilyContent('fixture', { token: async () => 'oauth' }, async (request, init) => {
     const url = new URL(String(request))
@@ -192,7 +192,10 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await request('fatherSide', settings, 'PUT', { token: 'first-registration' })).status, 200)
   assert.equal((await (await request('fatherSide', settings)).json()).enabled, true)
   assert.equal((await request('fatherSide', url + '/notification-test', 'POST')).status, 200)
-  assert.equal(pushes.pop()?.token, 'first-registration')
+  const testPush = pushes.pop()
+  assert.equal(testPush?.token, 'first-registration')
+  assert.equal(testPush?.notification.body, 'テスト通知です。')
+  assert.deepEqual(testPush?.data, { album: 'notices', test: 'true' })
   assert.equal((await request('fatherSide', url + '/notification-test', 'POST')).status, 429)
   assert.equal((await request('fatherSide', settings, 'PUT', { token: '', preferences: ['post'] })).status, 200)
   assert.equal((await request('fatherSide', settings, 'PUT', { token: 'no-opt-in' })).status, 200)
@@ -203,6 +206,8 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await request('owner', path + '/publish', 'POST')).status, 200)
   assert.equal(pushes.length, 1)
   assert.equal(pushes[0].token, 'updated')
+  assert.equal(pushes[0].notification.body, '新しい投稿がありました。')
+  assert.deepEqual(pushes[0].data, { album: 'notices', post: id })
   assert.equal(pushes[0].android.notification.channel_id, 'sukusuku_album')
   assert.equal(pushes[0].apns.payload.aps.sound, 'default')
   for (const uid of ['owner', 'parent', 'fatherSide']) {
@@ -227,7 +232,12 @@ test('family content stays private, supports discussion, and purges only the ret
   }
   const pushCount = pushes.length
   assert.equal((await request('fatherSide', path + '/comments', 'POST', { body: 'Lovely' })).status, 201)
-  assert.deepEqual(pushes.slice(pushCount).map(push => push.token).sort(), ['author-device', 'eligible-device'])
+  const commentPushes = pushes.slice(pushCount)
+  assert.deepEqual(commentPushes.map(push => push.token).sort(), ['author-device', 'eligible-device'])
+  for (const push of commentPushes) {
+    assert.equal(push.notification.body, '新しいコメントがありました。')
+    assert.deepEqual(push.data, { album: 'notices', post: id })
+  }
   assert.equal((await request('fatherSide', path + '/reactions/love', 'PUT', { enabled: true })).status, 200)
   assert.equal((await (await request('owner', path + '/discussion')).json()).reactions.love, 1)
   const initial = await (await request('owner', path + '/discussion')).json()

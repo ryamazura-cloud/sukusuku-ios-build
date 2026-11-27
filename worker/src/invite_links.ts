@@ -52,7 +52,20 @@ export function registerInviteLinks(app: Hono<AppEnv>) {
   })
   app.get('/invite-open.js', c => c.body(`
 const button = document.getElementById('open-app');
+const copy = document.getElementById('copy-invite');
 const link = new URL(location.href);
+if (copy && navigator.clipboard && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol === 'https:') {
+  copy.hidden = false;
+  copy.addEventListener('click', async () => {
+    const status = document.getElementById('copy-status');
+    try {
+      await navigator.clipboard.writeText(link.origin + link.pathname);
+      status.textContent = 'コピーしました。すくすくの「招待リンクから参加」に貼り付けてください。';
+    } catch {
+      status.textContent = 'コピーできませんでした。メッセージに届いた元の招待リンクを長押ししてコピーしてください。';
+    }
+  });
+}
 if (button && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol === 'https:') {
   const fallback = document.getElementById('android-store').href;
   button.href = 'intent://' + link.host + link.pathname +
@@ -67,23 +80,20 @@ if (button && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol 
     const ua = c.req.header('User-Agent') ?? ''
     const android = /Android/i.test(ua)
     const ios = /iPhone|iPad|iPod/i.test(ua)
-    const embedded = /Line\/|FBAN|FBAV|Instagram|;\s*wv\)|MicroMessenger|TikTok/i.test(ua) ||
-      (ios && !/Safari\//i.test(ua))
+    const embedded = /Line\/|FBAN|FBAV|Instagram|;\s*wv\)|MicroMessenger|TikTok/i.test(ua)
     const androidStore = distributionUrl(c.env.ANDROID_STORE_URL, 'android') ?? playStore
     const iosStore = distributionUrl(c.env.IOS_STORE_URL, 'ios')
-    const store = android ? androidStore : ios ? iosStore : undefined
-    // A verified HTTPS link is handled by the operating system before requesting this page.
-    // In-app browsers may keep it inside their web view, so leave both actions available there.
-    if (store && !embedded) {
-      return c.body(null, 302, { ...privacy, Location: store, Vary: 'User-Agent' })
+    // iOS browsers keep the invite visible so installed users can still join manually.
+    if (android && !embedded) {
+      return c.body(null, 302, { ...privacy, Location: androidStore, Vary: 'User-Agent' })
     }
     c.header('Vary', 'User-Agent')
     c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
     return c.html(`<!doctype html><html lang="ja"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>すくすくへの招待</title><style>body{margin:3rem auto;max-width:32rem;padding:0 1.25rem;font:1rem/1.7 system-ui;background:#f8f2e9;color:#292520}h1{font-size:1.7rem}.button{display:block;margin:.75rem 0;padding:.75rem 1rem;border-radius:1.5rem;background:#794d39;color:white;text-align:center;text-decoration:none;font-weight:600}[hidden]{display:none!important}</style>
-<main><h1>すくすくへの招待</h1>
-${android ? '<a id="open-app" class="button" hidden>すくすくで開く</a><script src="/invite-open.js" defer></script>' : ''}
+<title>すくすくへの招待</title><style>body{margin:3rem auto;max-width:32rem;padding:0 1.25rem;font:1rem/1.7 system-ui;background:#f8f2e9;color:#292520}h1{font-size:1.7rem}.button{display:block;box-sizing:border-box;width:100%;border:0;font:inherit;cursor:pointer;margin:.75rem 0;padding:.75rem 1rem;border-radius:1.5rem;background:#794d39;color:white;text-align:center;text-decoration:none;font-weight:600}[hidden]{display:none!important}</style>
+<main><h1>すくすくへの招待</h1><script src="/invite-open.js" defer></script>
+${android ? '<a id="open-app" class="button" hidden>すくすくで開く</a>' : '<p>インストール済みの場合は、届いた招待リンクを長押しして「すくすくで開く」を選べます。開かない場合は、招待リンクをコピーし、アプリの「招待リンクから参加」に貼り付けてください。</p><button id="copy-invite" class="button" type="button" hidden>招待リンクをコピー</button><p id="copy-status" role="status"></p>'}
 ${!android ? storeLink(iosStore, iosStore?.startsWith('https://testflight.apple.com/') ? 'TestFlightでインストール' : 'App Storeでインストール') : ''}
 ${!ios ? '<a id="android-store" class="button" href="' + escapeAttribute(androidStore) + '">Google Playでインストール</a>' : ''}
 <p>インストール後、メッセージに届いた元の招待リンクをもう一度開いてください。</p>

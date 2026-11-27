@@ -10,6 +10,7 @@ import 'package:go_router/go_router.dart';
 import '../album/album_api.dart';
 import '../album/album_screen.dart';
 import '../album/album_widgets.dart';
+import '../album/post_screen.dart';
 import '../album/update_banner.dart';
 import '../album/settings_screens.dart';
 import '../auth/auth.dart';
@@ -17,6 +18,13 @@ import '../notifications/probe.dart';
 import 'family_api.dart';
 import 'family_screen.dart';
 import 'welcome_screen.dart';
+
+final _noticePostIdPattern = RegExp(r'^[a-z0-9]{10}-[0-9a-f-]{36}$');
+
+String? _noticePostId(RemoteMessage notice) {
+  final post = notice.data['post'];
+  return post is String && _noticePostIdPattern.hasMatch(post) ? post : null;
+}
 
 typedef EntryState = ({FamilyMembership? family, bool? parentInvite});
 
@@ -59,16 +67,19 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
     if (notice.data['album'] != 'notices') return;
     try {
       final family = completedFamily ?? (await entry).family;
-      if (mounted && family != null) {
-        await Navigator.push<void>(
-          context,
-          MaterialPageRoute(
-            builder: (_) => NoticesScreen(AlbumApi(api, family)),
-          ),
-        );
+      if (!mounted || family == null) return;
+      final album = AlbumApi(api, family);
+      final post = _noticePostId(notice);
+      if (post != null) {
+        await PostScreen.openFromNotice(context, album, post);
+        return;
       }
-    } catch (_) {
-      // The album entry screen presents any membership error.
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(builder: (_) => NoticesScreen(album)),
+      );
+    } catch (failure) {
+      if (mounted) showFailure(context, failure);
     }
   }
 
@@ -302,14 +313,25 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              notice.data['test'] == 'true'
-                  ? 'テスト通知です。'
-                  : '家族のアルバムに新しいお知らせがあります。',
+              notice.notification?.body ??
+                  (notice.data['test'] == 'true'
+                      ? 'テスト通知です。'
+                      : '家族のアルバムに新しいお知らせがあります。'),
             ),
             action: SnackBarAction(
               label: '開く',
-              onPressed: () {
-                if (mounted) setState(() => tab = 1);
+              onPressed: () async {
+                if (!mounted) return;
+                final post = _noticePostId(notice);
+                if (post == null) {
+                  setState(() => tab = 1);
+                  return;
+                }
+                try {
+                  await PostScreen.openFromNotice(context, widget.api, post);
+                } catch (failure) {
+                  if (mounted) showFailure(context, failure);
+                }
               },
             ),
           ),

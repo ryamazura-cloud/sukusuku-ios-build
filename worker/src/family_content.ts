@@ -2,6 +2,15 @@ import { HttpError, mayPost, mayView, reserveBytes, type MediaType, type Scope }
 import { Firestore, FirestorePrecondition, digest, formerAlbums, integer, n, s, string, usageFields, userKey, type Doc, type Write } from './firestore.ts'
 
 type Actor = { uid: string; family: string }
+const pushMessages = {
+  post: '新しい投稿がありました。',
+  comment: '新しいコメントがありました。',
+  reaction: '投稿にリアクションがありました。',
+  commentReaction: 'コメントにリアクションがありました。',
+  join: '家族のメンバーが参加しました。',
+  test: 'テスト通知です。',
+} as const
+type NoticeKind = Exclude<keyof typeof pushMessages, 'test'>
 type Attachment = { id: string; type: MediaType }
 type PushTarget = { token: string } | { fid: string }
 const pushTarget = (doc: Doc | null): PushTarget | undefined => {
@@ -542,22 +551,22 @@ export class FamilyContent extends Firestore {
         this.write(this.memberPath(actor), { ...doc.fields, lastPushTest: s(now()) }),
       ] }
     })
-    const error = await this.sendPush(token, true)
+    const error = await this.sendPush(token, 'test')
     if (error) throw new HttpError(503, 'notification delivery ' + error)
   }
 
-  private async sendPush(target: PushTarget, test = false) {
+  private async sendPush(target: PushTarget, kind: NoticeKind | 'test', postId?: string) {
     const project = this.root.split('/')[1]
     try {
       const response = await this.fetcher('https://fcm.googleapis.com/v1/projects/' + project + '/messages:send', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + await this.google.token(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: { ...target, notification: {
-          title: 'すくすく', body: test ? 'テスト通知です。' : '家族のアルバムに新しいお知らせがあります。',
+          title: 'すくすく', body: pushMessages[kind],
         },
         android: { priority: 'HIGH', notification: { channel_id: 'sukusuku_album' } },
         apns: { headers: { 'apns-push-type': 'alert', 'apns-priority': '10' }, payload: { aps: { sound: 'default' } } },
-        data: { album: 'notices', ...(test ? { test: 'true' } : {}) } } }),
+        data: { album: 'notices', ...(postId ? { post: postId } : {}), ...(kind === 'test' ? { test: 'true' } : {}) } } }),
       })
       if (response.ok) return
       const body = await response.json().catch(() => null) as {
@@ -577,7 +586,7 @@ export class FamilyContent extends Firestore {
     await this.notify({ family, uid }, null, 'join', 'join-' + userKey(uid)).catch(() => {})
   }
 
-  private async notify(actor: Actor, id: string | null, kind: string, event: string, pushRecipient?: string) {
+  private async notify(actor: Actor, id: string | null, kind: NoticeKind, event: string, pushRecipient?: string) {
     const members = this.family(actor) + '/members'
     const user = userKey(actor.uid)
     const [profile, post] = await Promise.all([
@@ -606,7 +615,7 @@ export class FamilyContent extends Firestore {
     if (writes.length) await this.send('commit', { writes })
     if (!recipients.size) return
     await Promise.all([...recipients].map(async ([key, token]) => {
-      if (await this.sendPush(token) !== 'UNREGISTERED') return
+      if (await this.sendPush(token, kind, id ?? undefined) !== 'UNREGISTERED') return
       const path = members + '/' + key
       await this.transaction(async tx => {
         const current = await this.get(path, tx)

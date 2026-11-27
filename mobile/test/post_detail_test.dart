@@ -42,6 +42,27 @@ class _PostApi extends AlbumApi {
 }
 
 void main() {
+  testWidgets('opens the post identified by a notification', (tester) async {
+    const postId = '0000000000-9b520f34-b260-48b1-97d8-343d40e44b09';
+    final api = _PostApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => PostScreen.openFromNotice(context, api, postId),
+              child: const Text('開く'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('開く'));
+    await tester.pumpAndSettle();
+    expect(tester.widget<PostScreen>(find.byType(PostScreen)).id, postId);
+    expect(find.text('今日のひとこま'), findsOneWidget);
+  });
+
   testWidgets('new posts start with today and edits keep their saved date', (
     tester,
   ) async {

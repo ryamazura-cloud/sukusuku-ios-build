@@ -17,6 +17,20 @@ class PostScreen extends StatefulWidget {
   final String id;
   final List<AlbumRow> children;
   final String? selectedMediaId;
+
+  static Future<void> openFromNotice(
+    BuildContext context,
+    AlbumApi api,
+    String id,
+  ) async {
+    final children = rows((await api.get('children'))['children']);
+    if (!context.mounted) return;
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => PostScreen(api, id, children)),
+    );
+  }
+
   @override
   State<PostScreen> createState() => _PostScreenState();
 }

@@ -7,7 +7,9 @@ import type { FamilyContent } from './family_content.ts'
 import { registerContent } from './content_routes.ts'
 import { registerDeletionPage } from './deletion_page.ts'
 
-export type Bindings = {
+import { latestStoreBuild, type StoreUpdateBindings } from './store_updates.ts'
+
+export type Bindings = StoreUpdateBindings & {
   APP_ENV: string
   FIREBASE_PROJECT_ID: string
   GOOGLE_CLIENT_EMAIL: string
@@ -95,13 +97,9 @@ export function createApp(dependencies: Dependencies) {
   })
   registerInviteLinks(app)
   app.get('/health', c => c.json({ status: 'ok' }, 200, noCache))
-  app.get('/app-update', c => {
-    const distribution = c.req.query('distribution')
-    const value = distribution === 'android' ? c.env.ANDROID_LATEST_BUILD
-      : distribution === 'app-store' ? c.env.IOS_LATEST_BUILD
-      : distribution === 'testflight' ? c.env.TESTFLIGHT_LATEST_BUILD : undefined
-    const latestBuild = Number(value)
-    return c.json({ latestBuild: Number.isSafeInteger(latestBuild) && latestBuild > 0 ? latestBuild : 0 }, 200, noCache)
+  app.get('/app-update', async c => {
+    const latestBuild = await latestStoreBuild(c.env, c.req.query('distribution'))
+    return c.json({ latestBuild }, 200, noCache)
   })
 
   const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {

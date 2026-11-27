@@ -1,6 +1,7 @@
 import { createApp, type Bindings } from './app.ts'
 import { FamilyContent } from './family_content.ts'
 import { FirebaseVerifier, GoogleAccess } from './google.ts'
+import { syncStoreBuilds } from './store_updates.ts'
 
 const verifier = new FirebaseVerifier()
 let previous: Bindings | undefined
@@ -17,10 +18,15 @@ function store(env: Bindings) {
   return firestore
 }
 
-export default createApp({
+const app = createApp({
   uid: (header, project) => verifier.uid(header, project),
   store,
   families: store,
   content: store,
   recentUid: (header, project) => verifier.uid(header, project, undefined, 300, true),
 })
+
+export default {
+  fetch: app.fetch,
+  scheduled: (_controller, env) => syncStoreBuilds(env),
+} satisfies ExportedHandler<Bindings>

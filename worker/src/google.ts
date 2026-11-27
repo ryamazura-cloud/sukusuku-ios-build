@@ -4,13 +4,16 @@ const encoder = new TextEncoder()
 const jwksUrl = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'
 const oauthUrl = 'https://oauth2.googleapis.com/token'
 
-function encode(bytes: Uint8Array) {
+export function encode(bytes: Uint8Array) {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
-const encodeJson = (obj: object) => encode(encoder.encode(JSON.stringify(obj)))
+export const encodeJson = (obj: object) => encode(encoder.encode(JSON.stringify(obj)))
 function decode(value: string) {
   return Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), char => char.charCodeAt(0))
 }
+export const decodePem = (key: string) =>
+  decode(key.replace(/\\n/g, '\n').replace(/-----[^-]+-----|\s/g, ''))
+
 function fromJson(value: string) {
   return JSON.parse(new TextDecoder().decode(decode(value)))
 }
@@ -72,7 +75,14 @@ export class FirebaseVerifier {
 export class GoogleAccess {
   private cached?: { token: string; until: number }
   private readonly account: { email: string; key: string }
-  constructor(account: { email: string; key: string }) { this.account = account }
+  private readonly scope: string
+  constructor(
+    account: { email: string; key: string },
+    scope = 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/identitytoolkit',
+  ) {
+    this.account = account
+    this.scope = scope
+  }
   async token() {
     const now = Math.floor(Date.now() / 1000)
     if (this.cached && this.cached.until > now) return this.cached.token
@@ -82,15 +92,16 @@ export class GoogleAccess {
     const { email, key } = this.account
     if (!email || !key) throw new HttpError(503, 'Firestore credentials are not configured')
     const privateKey = await crypto.subtle.importKey('pkcs8',
-      decode(key.replace(/\\n/g, '\n').replace(/-----[^-]+-----|\s/g, '')),
+      decodePem(key),
       signatureAlgorithm, false, ['sign'])
     const jwt = encodeJson({ alg: 'RS256', typ: 'JWT' }) + '.' + encodeJson({
       iss: email, aud: oauthUrl, iat: now, exp: now + 3600,
-      scope: 'https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/identitytoolkit',
+      scope: this.scope,
     })
     const signature = await crypto.subtle.sign(signatureAlgorithm, privateKey, encoder.encode(jwt))
     const response = await fetch(oauthUrl, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       body: new URLSearchParams({
         grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
         assertion: jwt + '.' + encode(new Uint8Array(signature)),

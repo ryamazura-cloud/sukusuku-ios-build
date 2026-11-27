@@ -518,19 +518,10 @@ class _NoticesScreenState extends State<NoticesScreen> {
                     ? null
                     : () async {
                         try {
-                          final children = rows(
-                            (await widget.api.get('children'))['children'],
-                          );
-                          if (!mounted) return;
-                          await Navigator.push<bool>(
+                          await PostScreen.openFromNotice(
                             this.context,
-                            MaterialPageRoute(
-                              builder: (_) => PostScreen(
-                                widget.api,
-                                notice['post'] as String,
-                                children,
-                              ),
-                            ),
+                            widget.api,
+                            notice['post'] as String,
                           );
                           if (mounted) reload();
                         } catch (failure) {

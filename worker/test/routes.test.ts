@@ -141,8 +141,14 @@ test('public invitation landing page does not expose the token or album details'
   assert.equal(android.headers.get('location'), 'https://play.google.com/store/apps/details?id=biz.wisemap.family_share')
   assert.equal(android.headers.get('referrer-policy'), 'no-referrer')
   const ios = await open('/invite/' + code, 'Mozilla/5.0 (iPhone) Safari/605.1.15')
-  assert.equal(ios.status, 302)
-  assert.equal(ios.headers.get('location'), env.IOS_STORE_URL)
+  assert.equal(ios.status, 200)
+  assert.equal(ios.headers.get('location'), null)
+  const iosHtml = await ios.text()
+  assert.match(iosHtml, /招待リンクをコピー/)
+  assert.match(iosHtml, /TestFlightでインストール/)
+  assert.doesNotMatch(iosHtml, new RegExp(code))
+  const iosEmbedded = await open('/invite/' + code, 'Mozilla/5.0 (iPhone) Line/15.1')
+  assert.match(await iosEmbedded.text(), /招待リンクをコピー/)
   const embedded = await open('/invite/' + code, 'Mozilla/5.0 (Linux; Android 16; wv) Line/15.1')
   assert.equal(embedded.status, 200)
   const html = await embedded.text()
@@ -152,8 +158,21 @@ test('public invitation landing page does not expose the token or album details'
   const helper = await open('/invite-open.js')
   assert.match(helper.headers.get('content-type')!, /application\/javascript/)
   const button = { hidden: true, href: '' }
-  const document = { getElementById: (id: string) => id === 'open-app' ? button : { href: android.headers.get('location') } }
-  new Function('document', 'location', await helper.text())(document, { href: 'https://example.invalid/invite/' + code })
+  const document = { getElementById: (id: string) =>
+    id === 'open-app' ? button : id === 'android-store' ? { href: android.headers.get('location') } : null }
+  const runHelper = new Function('document', 'location', 'navigator', await helper.text())
+  runHelper(document, { href: 'https://example.invalid/invite/' + code }, {})
+  let click: (() => Promise<void>) | undefined
+  let copied: string | undefined
+  const status = { textContent: '' }
+  const copy = { hidden: true, addEventListener: (_event: string, callback: () => Promise<void>) => { click = callback } }
+  runHelper({ getElementById: (id: string) => id === 'copy-invite' ? copy : id === 'copy-status' ? status : null },
+    { href: 'https://example.invalid/invite/' + code + '?tracking=1' },
+    { clipboard: { writeText: async (value: string) => { copied = value } } })
+  assert.equal(copy.hidden, false)
+  await click!()
+  assert.equal(copied, 'https://example.invalid/invite/' + code)
+  assert.match(status.textContent, /コピーしました/)
   assert.equal(button.hidden, false)
   assert.match(button.href, new RegExp('^intent://example\\.invalid/invite/' + code + '#Intent;scheme=https;package='))
   const assetlinks = await (await open('/.well-known/assetlinks.json')).json()

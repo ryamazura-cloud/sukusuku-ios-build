@@ -26,10 +26,28 @@
 
 ## 更新バナーとアルバム管理の確認
 
-1. WorkerをデプロイしてからAndroid・iPhoneの新しいビルドを配信します。配信先で更新が利用可能になったら、`worker/wrangler.jsonc` の対象環境の `vars` にビルド番号を文字列で設定し、Workerを再デプロイします。AndroidのGoogle Playは `ANDROID_LATEST_BUILD`、iOSのApp Storeは `IOS_LATEST_BUILD`、TestFlightは `TESTFLIGHT_LATEST_BUILD` を使います。未設定または `"0"` の配信先は案内しません。段階公開中は対象ユーザー全員が更新できる段階で設定します。同じWorkerを一般配信と内部テストで共用する場合、Androidの値は一般配信で取得できる番号に合わせます。
+1. WorkerをデプロイしてからAndroid・iPhoneの新しいビルドを配信します。Google PlayとApp Storeの自動同期、TestFlightの手動設定は下記を参照してください。
 2. 対応済みの一つ前のビルドでアルバムを開き、バナーから対象の配信先が開くことと、更新後にバナーが消えることを確認します。iOSを手元でTestFlight用にビルドするときは `--dart-define=APP_DISTRIBUTION=testflight` を付けます。CIでは設定済みです。
 3. 初回画面と設定の「アプリについて」から、公式サイトのプライバシーポリシーと利用規約が開くことを確認します。旧ビルドからの利用時間送信は、更新済みのWorkerで受け付けません。
 4. 管理者は自身以外のメンバーを退出させられます。アカウントや過去の投稿・コメントは保持され、同じアルバムに再参加するには新しい招待コードが必要です。利用者本人がアカウントを削除した場合は、退出済みのアルバムも含めて関連データを削除します。
+
+## Google Play・App Storeの更新番号を自動同期する
+
+開発用Worker（`--env dev`）が30分ごとに配信状況を確認し、取得した番号をR2に保存します。アプリは従来どおり `/app-update` から番号を取得するため、同期を有効にするためのアプリの再ビルドは不要です。
+
+- Google Playは現在の配信先に合わせ、`PLAY_UPDATE_TRACK` を `internal` に設定しています。一般公開に切り替えるときは `production` に変更してください。コードでは選択したトラックの `completed` リリースを採用します。配信トラックの対象資格や実際のストア反映には、利用者ごとの差が出る場合があります。
+- App Storeは iOS の配信可能なバージョンに紐づくビルド番号を採用します。ビルド番号は、アプリバージョンを変更した場合も整数の連番で運用してください。
+- 設定済みのストアでAPIエラーが続く場合は、最後に確認できた番号を48時間保持し、その後は更新案内を非表示にします。初回同期の完了前、または配信済みビルドを取得できない場合は `0` を返します。API認証を未設定のストアでは従来の手動設定を使います。TestFlightは `TESTFLIGHT_LATEST_BUILD` で管理します。
+
+### 初回の設定
+
+1. Google Cloudで **Google Play Android Developer API** を有効にします。同期専用のサービスアカウントを作成し、Play Consoleの「ユーザーと権限」で、すくすくに対する「アプリ情報の表示（読み取り専用）」を付与します。Play APIで一時編集を開き、トラックを参照後に破棄するため、同アカウントはリリース作業と共用しません。サービスアカウントのメールアドレスと秘密鍵を、Workerの `PLAY_UPDATE_CLIENT_EMAIL`、`PLAY_UPDATE_PRIVATE_KEY` に登録します。
+2. App Store Connectの「ユーザとアクセス」→「統合」で、配信情報の参照に使うApp Store Connect APIのチームキーを用意します。Issuer ID、Key ID、`.p8` の内容をそれぞれ `ASC_UPDATE_ISSUER_ID`、`ASC_UPDATE_KEY_ID`、`ASC_UPDATE_PRIVATE_KEY` に登録します。
+3. Cloudflareの `family-share-dev` の「設定」→「変数とシークレット」で、上記5項目をシークレットとして設定します。CLIからは `npx.cmd wrangler secret put シークレット名 --env dev` でも登録できます。Workerフォルダで `npx.cmd wrangler deploy --env dev --keep-vars` を実行します。
+4. Cron実行後、下記の応答を確認します。Cloudflareのログでは `Store update synchronized` と取得番号を確認できます。
+
+   - [Google Playの現在の番号](https://family-share-dev.wisemap.workers.dev/app-update?distribution=android)
+   - [App Storeの現在の番号](https://family-share-dev.wisemap.workers.dev/app-update?distribution=app-store)
 
 ## Firestore試験データ
 
