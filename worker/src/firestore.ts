@@ -16,7 +16,7 @@ export interface Store {
 }
 export type ParentRelationship = 'father' | 'mother'
 export type GuestRelationship = 'grandfather' | 'grandmother' | 'sibling' | 'other'
-export type JoinProfile = { nickname: string; relationship: ParentRelationship | GuestRelationship }
+export type JoinProfile = { nickname: string; avatar?: string; relationship: ParentRelationship | GuestRelationship }
 export type NewAlbum = JoinProfile & { relationship: ParentRelationship; childName: string; birthday: string }
 
 export interface FamilyStore {
@@ -185,7 +185,7 @@ export class Firestore implements Store, FamilyStore {
         this.write(path + '/members/' + user, { role: s('admin'), active,
           ...(profile ? { relationship: s(profile.relationship) } : {}) }, true),
         ...(profile ? [
-          this.write('profiles/' + user, { name: s(profile.nickname) }),
+          this.write('profiles/' + user, { name: s(profile.nickname), ...(profile.avatar ? { avatar: s(profile.avatar) } : {}) }),
           this.write(path + '/children/' + child, { name: s(profile.childName), birthday: s(profile.birthday) }, true),
         ] : []),
         this.write(index, { ...previous?.fields, familyId: s(id) }, !previous),
@@ -268,7 +268,7 @@ export class Firestore implements Store, FamilyStore {
         }, !previous),
         this.write(index, { ...existing?.fields, familyId: s(id) }, !existing),
         this.write(invitePath, { ...invite.fields, usedBy: s(uid) }),
-        ...(profile ? [this.write('profiles/' + user, { name: s(profile.nickname) })] : []),
+        ...(profile ? [this.write('profiles/' + user, { name: s(profile.nickname), ...(profile.avatar ? { avatar: s(profile.avatar) } : {}) })] : []),
       ] }
     })
     if (joined) await this.onJoined(uid, family.id)

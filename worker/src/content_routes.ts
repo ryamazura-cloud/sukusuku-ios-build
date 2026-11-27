@@ -1,6 +1,6 @@
 import { bodyLimit } from 'hono/body-limit'
 import type { Context, Hono } from 'hono'
-import { HttpError, MAX_UPLOAD, validateMedia, type Scope } from './domain.ts'
+import { HttpError, MAX_UPLOAD, memberAvatar, validateMedia, type Scope } from './domain.ts'
 import type { AppEnv, Bindings } from './app.ts'
 import type { FamilyContent, PostInput } from './family_content.ts'
 
@@ -63,8 +63,10 @@ export function registerContent(
   })
   app.get('/v1/profile', async c => c.json(await db(c).profile(c.get('uid')), 200, headers))
   app.put('/v1/profile', small, async c => {
-    const { name } = await json(c.req.raw)
-    return c.json(await db(c).profile(c.get('uid'), text(name, 60)), 200, headers)
+    const { name, avatar } = await json(c.req.raw)
+    const patch = { name: name === undefined ? undefined : text(name, 60), avatar: memberAvatar(avatar) }
+    if (patch.name === undefined && patch.avatar === undefined) throw new HttpError(400, 'empty profile update')
+    return c.json(await db(c).profile(c.get('uid'), patch), 200, headers)
   })
   app.get('/v1/account', async c => c.json(await db(c).retirementInfo(c.get('uid')), 200, headers))
   app.put('/v1/account/deletion-code', small, async c => {

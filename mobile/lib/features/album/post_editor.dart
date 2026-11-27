@@ -28,7 +28,7 @@ class _PostEditorState extends State<PostEditor> {
   );
   late String? scope = widget.post?['scope'] as String?;
   late DateTime? date = widget.post == null
-      ? DateUtils.dateOnly(DateTime.now())
+      ? widget.selectedMedia?.capturedAt ?? DateUtils.dateOnly(DateTime.now())
       : DateTime.tryParse(widget.post?['capturedAt'] as String? ?? '');
   late final tags = ((widget.post?['childIds'] as List?)?.cast<String>() ?? [])
       .where((id) => widget.children.any((child) => child['id'] == id))

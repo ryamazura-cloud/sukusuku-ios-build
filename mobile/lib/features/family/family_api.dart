@@ -66,6 +66,7 @@ class FamilyApi {
     required String albumName,
     required String relationship,
     required String nickname,
+    String? avatar,
     required String childName,
     required String birthday,
   }) async {
@@ -73,6 +74,7 @@ class FamilyApi {
       'name': albumName,
       'relationship': relationship,
       'nickname': nickname,
+      'avatar': ?avatar,
       'childName': childName,
       'birthday': birthday,
     });
@@ -90,10 +92,12 @@ class FamilyApi {
     String code, {
     String? relationship,
     String? nickname,
+    String? avatar,
   }) => _writeMembership('families/join', {
     'code': code,
     'relationship': ?relationship,
     'nickname': ?nickname,
+    'avatar': ?avatar,
   });
 
   Future<FamilyMembership> _writeMembership(

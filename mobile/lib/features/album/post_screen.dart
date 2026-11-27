@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../family/member_avatar.dart';
 import 'album_api.dart';
 import 'album_widgets.dart';
 import 'media_viewer.dart';
@@ -209,6 +210,23 @@ class _PostScreenState extends State<PostScreen> {
     final mine = item['mine'] == true;
     final colors = Theme.of(context).colorScheme;
     final alignment = mine ? WrapAlignment.end : WrapAlignment.start;
+    final avatar = MemberAvatar(item['avatar'] as String?);
+    final nickname = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (!mine) ...[avatar, const SizedBox(width: 8)],
+        Flexible(
+          child: Text(
+            item['name'] as String,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.labelLarge
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+        ),
+        if (mine) ...[const SizedBox(width: 8), avatar],
+      ],
+    );
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: FractionallySizedBox(
@@ -223,11 +241,7 @@ class _PostScreenState extends State<PostScreen> {
               crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 8,
               children: [
-                Text(
-                  item['name'] as String,
-                  style: Theme.of(context).textTheme.labelLarge
-                      ?.copyWith(fontWeight: FontWeight.w700),
-                ),
+                if (!mine) nickname,
                 Tooltip(
                   message: timeLabel(item['at']),
                   child: Text(
@@ -235,7 +249,8 @@ class _PostScreenState extends State<PostScreen> {
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
-                if (menu != null) menu,
+                ?menu,
+                if (mine) nickname,
               ],
             ),
             const SizedBox(height: 4),
@@ -278,8 +293,10 @@ class _PostScreenState extends State<PostScreen> {
     );
   }
 
-  Widget authorLine(String name, Object? timestamp, {Widget? menu}) => Row(
+  Widget authorLine(String name, Object? timestamp, String? avatar) => Row(
     children: [
+      MemberAvatar(avatar),
+      const SizedBox(width: 8),
       Expanded(
         child: Text(
           name,
@@ -297,7 +314,6 @@ class _PostScreenState extends State<PostScreen> {
               ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
       ),
-      if (menu != null) menu,
     ],
   );
 
@@ -455,7 +471,11 @@ class _PostScreenState extends State<PostScreen> {
                 ),
               const SizedBox(height: 12),
               postContent(
-                header: authorLine(post['author'] as String, post['createdAt']),
+                header: authorLine(
+                  post['author'] as String,
+                  post['createdAt'],
+                  post['avatar'] as String?,
+                ),
                 text: post['body'] as String,
                 extra: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,

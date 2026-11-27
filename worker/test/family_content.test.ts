@@ -240,7 +240,15 @@ test('family content stays private, supports discussion, and purges only the ret
   }
   assert.equal((await request('fatherSide', path + '/reactions/love', 'PUT', { enabled: true })).status, 200)
   assert.equal((await (await request('owner', path + '/discussion')).json()).reactions.love, 1)
+  const profilePath = '/v1/profile'
+  assert.equal((await request('owner', profilePath, 'PUT', { name: 'Owner' })).status, 200)
+  assert.equal((await request('owner', profilePath, 'PUT', { avatar: 'animal-01' })).status, 200)
+  assert.deepEqual(await (await request('owner', profilePath)).json(), { name: 'Owner', avatar: 'animal-01' })
+  assert.equal((await request('owner', profilePath, 'PUT', { avatar: 'animal-51' })).status, 400)
+  assert.equal((await (await request('owner', path)).json()).avatar, 'animal-01')
+  assert.equal((await request('fatherSide', profilePath, 'PUT', { avatar: 'person-50' })).status, 200)
   const initial = await (await request('owner', path + '/discussion')).json()
+  assert.equal(initial.comments[0].avatar, 'person-50')
   const commentId = initial.comments[0].id
   const commentPath = path + '/comments/' + commentId
   assert.equal((await request('owner', commentPath, 'PUT', { body: 'Denied' })).status, 403)

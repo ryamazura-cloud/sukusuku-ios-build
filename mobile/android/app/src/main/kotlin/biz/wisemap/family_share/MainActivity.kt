@@ -4,6 +4,8 @@ import android.app.AlertDialog
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import android.media.MediaMetadataRetriever
+import androidx.exifinterface.media.ExifInterface
 import android.graphics.Color
 import android.view.Gravity
 import android.view.ViewGroup
@@ -13,6 +15,7 @@ import android.widget.VideoView
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.StandardMethodCodec
 import java.io.File
 import java.io.IOException
 
@@ -42,6 +45,17 @@ class MainActivity : FlutterActivity() {
                 }
                 result.success(version)
             }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "biz.wisemap.family_share/metadata",
+            StandardMethodCodec.INSTANCE, flutterEngine.dartExecutor.makeBackgroundTaskQueue())
+            .setMethodCallHandler { call, result ->
+                if (call.method != "captureDate") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                val path = call.argument<String>("path")
+                val date = path?.let { readCaptureDate(it, call.argument<Boolean>("video") == true) }
+                result.success(date)
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "biz.wisemap.family_share/video")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
@@ -51,6 +65,20 @@ class MainActivity : FlutterActivity() {
                 }
             }
     }
+
+    private fun readCaptureDate(path: String, video: Boolean): String? = runCatching {
+        if (video) {
+            val metadata = MediaMetadataRetriever()
+            try {
+                metadata.setDataSource(path)
+                metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+            } finally {
+                metadata.release()
+            }
+        } else {
+            ExifInterface(path).getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+        }
+    }.getOrNull()
 
     private fun openVideo(path: String?, result: MethodChannel.Result) {
         val file = try {

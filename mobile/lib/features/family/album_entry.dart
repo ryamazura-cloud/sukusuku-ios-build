@@ -16,6 +16,7 @@ import '../album/settings_screens.dart';
 import '../auth/auth.dart';
 import '../notifications/probe.dart';
 import 'family_api.dart';
+import 'member_avatar.dart';
 import 'family_screen.dart';
 import 'welcome_screen.dart';
 
@@ -131,6 +132,7 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
   Future<FamilyMembership> submit({
     required String relationship,
     required String nickname,
+    required String? avatar,
     required String child,
     required DateTime? birth,
   }) async {
@@ -138,12 +140,18 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
     if (!mounted) throw StateError('もう一度アプリを開いてください。');
     final code = widget.code;
     if (code != null) {
-      return api.join(code, relationship: relationship, nickname: nickname);
+      return api.join(
+        code,
+        relationship: relationship,
+        nickname: nickname,
+        avatar: avatar,
+      );
     }
     return api.createAlbum(
       albumName: '家族のアルバム',
       relationship: relationship,
       nickname: nickname,
+      avatar: avatar,
       childName: child,
       birthday: dateLabel(birth!),
     );
@@ -466,6 +474,7 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
 typedef _SubmitEntry = Future<FamilyMembership> Function({
   required String relationship,
   required String nickname,
+  required String? avatar,
   required String child,
   required DateTime? birth,
 });
@@ -494,6 +503,7 @@ class _EntryFormState extends State<_EntryForm> {
   final nickname = TextEditingController();
   final child = TextEditingController();
   String? relationship;
+  String? avatar;
   DateTime? birth;
   bool busy = false;
   String? error;
@@ -519,6 +529,7 @@ class _EntryFormState extends State<_EntryForm> {
       final family = await widget.submit(
         relationship: relationship!,
         nickname: nickname.text,
+        avatar: avatar,
         child: child.text,
         birth: birth,
       );
@@ -591,6 +602,23 @@ class _EntryFormState extends State<_EntryForm> {
               ),
               const SizedBox(height: 12),
               field('ニックネーム（後で変更可）', nickname),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: MemberAvatar(avatar, size: 44),
+                title: const Text('自分のアイコンを選ぶ'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: busy
+                    ? null
+                    : () async {
+                        final selected = await pickMemberAvatar(
+                          context,
+                          avatar,
+                        );
+                        if (mounted && selected != null) {
+                          setState(() => avatar = selected);
+                        }
+                      },
+              ),
               if (widget.creating) ...[
                 field('子どもの名前', child),
                 OutlinedButton.icon(

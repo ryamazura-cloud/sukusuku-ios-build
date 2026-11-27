@@ -101,12 +101,20 @@ export class FamilyContent extends Firestore {
     return { doc, path, member }
   }
 
-  async profile(uid: string, name?: string) {
+  async profile(uid: string, patch?: { name?: string; avatar?: string }) {
     const path = 'profiles/' + userKey(uid)
-    if (name === undefined) return { name: string(await this.get(path), 'name') ?? '' }
+    if (!patch) {
+      const doc = await this.get(path)
+      return { name: string(doc, 'name') ?? '', avatar: string(doc, 'avatar') }
+    }
     return this.transaction(async tx => {
       if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
-      return { result: { name }, writes: [this.write(path, { name: s(name) })] }
+      const doc = await this.get(path, tx)
+      const name = patch.name ?? string(doc, 'name') ?? ''
+      const avatar = patch.avatar ?? string(doc, 'avatar')
+      return { result: { name, avatar }, writes: [this.write(path, {
+        ...doc?.fields, name: s(name), ...(avatar ? { avatar: s(avatar) } : {}),
+      })] }
     })
   }
 
@@ -365,7 +373,10 @@ export class FamilyContent extends Firestore {
 
   async detail(actor: Actor, id: string) {
     const { doc, member } = await this.post(actor, id)
-    return this.summary(doc, actor, member.role === 'admin')
+    const author = string(doc, 'author')
+    const profile = author ? await this.get('profiles/' + author) : null
+    const summary = this.summary(doc, actor, member.role === 'admin')
+    return { ...summary, avatar: string(profile, 'avatar') }
   }
 
   async download(actor: Actor, id: string, item: string, bucket: R2Bucket) {
@@ -434,13 +445,19 @@ export class FamilyContent extends Firestore {
     const { path } = await this.post(actor, id)
     const page = await this.newestPage(path + '/comments', cursor)
     const user = userKey(actor.uid)
-    const comments = (page.documents ?? []).map(doc => {
+    const docs = page.documents ?? []
+    const authors = new Set(docs.map(doc => string(doc, 'author')).filter((id): id is string => !!id))
+    const profiles = new Map(await Promise.all([...authors].map(async id =>
+      [id, await this.get('profiles/' + id)] as const)))
+    const comments = docs.map(doc => {
+      const profile = profiles.get(string(doc, 'author') ?? '') ?? null
       const byUser = asJson<Record<string, string[]>>(doc, 'reactionMembers')
       const reactions: Record<string, number> = {}
       for (const kinds of Object.values(byUser)) {
         for (const kind of kinds) reactions[kind] = (reactions[kind] ?? 0) + 1
       }
-      return { id: idOf(doc), name: string(doc, 'name'), body: string(doc, 'body'),
+      return { id: idOf(doc), name: string(doc, 'name'),
+        avatar: string(profile, 'avatar'), body: string(doc, 'body'),
         mine: string(doc, 'author') === user, at: string(doc, 'at'),
         reactions, own: byUser[user] ?? [] }
     })

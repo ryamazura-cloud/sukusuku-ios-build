@@ -1,4 +1,12 @@
 export const MAX_UPLOAD = 16_000_000
+export function memberAvatar(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^(person|animal)-(0[1-9]|[1-4]\d|50)$/.test(value)) {
+    throw new HttpError(400, 'invalid member avatar')
+  }
+  return value
+}
+
 export const MAX_STORAGE = 5_000_000_000
 export const MAX_MONTH = 300_000_000
 export const MAX_VIDEO_MS = 60_000

@@ -1,6 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { HttpError, MAX_UPLOAD, inviteRoles, type InviteRole, validateMedia } from './domain.ts'
+import { HttpError, MAX_UPLOAD, inviteRoles, memberAvatar, type InviteRole, validateMedia } from './domain.ts'
 import { registerInviteLinks } from './invite_links.ts'
 import type { FamilyStore, Store, JoinProfile, ParentRelationship } from './firestore.ts'
 import type { FamilyContent } from './family_content.ts'
@@ -122,17 +122,17 @@ export function createApp(dependencies: Dependencies) {
     return c.json({ family }, 200, noCache)
   })
   app.post('/v1/families', smallBody, async c => {
-    const { name, relationship, nickname: memberName, childName, birthday: birth } = await jsonRecord(c.req.raw)
+    const { name, relationship, nickname: memberName, childName, birthday: birth, avatar } = await jsonRecord(c.req.raw)
     const normalized = name === undefined ? '家族のアルバム' : typeof name === 'string' ? name.trim() : ''
     if (!normalized || normalized.length > 60 || /[\u0000-\u001f\u007f]/.test(normalized)) {
       throw new HttpError(400, 'invalid family name')
     }
-    const hasProfile = [relationship, memberName, childName, birth].some(value => value !== undefined)
+    const hasProfile = [relationship, memberName, childName, birth, avatar].some(value => value !== undefined)
     if (hasProfile && (typeof relationship !== 'string' || !parentLabels.includes(relationship))) {
       throw new HttpError(400, 'invalid parent relationship')
     }
     const profile = hasProfile ? { relationship: relationship as ParentRelationship,
-      nickname: nickname(memberName), childName: nickname(childName), birthday: birthday(birth) } : undefined
+      nickname: nickname(memberName), childName: nickname(childName), birthday: birthday(birth), avatar: memberAvatar(avatar) } : undefined
     const family = await dependencies.families(c.env).createFamily(c.get('uid'), normalized, profile)
     return c.json({ family }, 201, noCache)
   })
@@ -153,15 +153,15 @@ export function createApp(dependencies: Dependencies) {
     return c.json({ type: await store.inviteType(c.get('uid'), code) }, 200, noCache)
   })
   app.post('/v1/families/join', smallBody, async c => {
-    const { code, relationship, nickname: memberName } = await jsonRecord(c.req.raw)
+    const { code, relationship, nickname: memberName, avatar } = await jsonRecord(c.req.raw)
     const normalized = typeof code === 'string' ? code.trim().toLowerCase() : ''
     if (!inviteCode.test(normalized)) throw new HttpError(400, 'invalid invite code')
-    const hasProfile = relationship !== undefined || memberName !== undefined
+    const hasProfile = relationship !== undefined || memberName !== undefined || avatar !== undefined
     if (hasProfile && (typeof relationship !== 'string' || ![...parentLabels, ...relativeLabels].includes(relationship))) {
       throw new HttpError(400, 'invalid relationship')
     }
     const profile = hasProfile ? { relationship: relationship as JoinProfile['relationship'],
-      nickname: nickname(memberName) } : undefined
+      nickname: nickname(memberName), avatar: memberAvatar(avatar) } : undefined
     const family = await dependencies.families(c.env).joinFamily(c.get('uid'), normalized, profile)
     return c.json({ family }, 200, noCache)
   })

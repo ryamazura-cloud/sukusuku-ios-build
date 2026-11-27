@@ -1,5 +1,6 @@
 import AVKit
 import Flutter
+import ImageIO
 import UIKit
 
 @main
@@ -17,6 +18,26 @@ import UIKit
       }
       let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
       result(version.flatMap { Int($0) })
+    }
+    let metadata = FlutterMethodChannel(
+      name: "biz.wisemap.family_share/metadata",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    metadata.setMethodCallHandler { call, result in
+      guard call.method == "captureDate" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard let args = call.arguments as? [String: Any], let path = args["path"] as? String else {
+        result(nil)
+        return
+      }
+      let url = URL(fileURLWithPath: path)
+      let video = args["video"] as? Bool == true
+      Task.detached {
+        let date = await captureDate(url, video: video)
+        await MainActor.run { result(date) }
+      }
     }
     let channel = FlutterMethodChannel(
       name: "biz.wisemap.family_share/video",
@@ -59,6 +80,27 @@ import UIKit
       presenter.present(navigation, animated: true)
     }
   }
+}
+
+private func captureDate(_ url: URL, video: Bool) async -> String? {
+  if video {
+    let asset = AVURLAsset(url: url)
+    if #available(iOS 15.0, *) {
+      guard let item = try? await asset.load(.creationDate) else { return nil }
+      if let value = try? await item.load(.stringValue) { return value }
+      if let value = try? await item.load(.dateValue) {
+        return ISO8601DateFormatter().string(from: value)
+      }
+      return nil
+    }
+    return asset.creationDate?.stringValue
+  }
+  guard
+    let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+    let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+    let exif = properties[kCGImagePropertyExifDictionary as String] as? [String: Any]
+  else { return nil }
+  return exif[kCGImagePropertyExifDateTimeOriginal as String] as? String
 }
 
 private final class SukusukuVideoScreen: UIViewController {

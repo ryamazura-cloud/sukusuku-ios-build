@@ -13,6 +13,7 @@ import '../album/settings_screens.dart';
 
 import 'family_api.dart';
 import 'legal_document.dart';
+import 'member_avatar.dart';
 
 class FamilyScreen extends ConsumerStatefulWidget {
   const FamilyScreen(
@@ -141,37 +142,73 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
           future: profile,
           builder: (context, snapshot) {
             final current = snapshot.data?['name'] as String? ?? '';
-            return ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('ニックネーム'),
-              subtitle: current.isEmpty ? null : Text(current),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: busy || snapshot.connectionState != ConnectionState.done
-                  ? null
-                  : () async {
-                      final input = await textDialog(
-                        context,
-                        'ニックネームを変更',
-                        label: 'ニックネーム',
-                        initial: current,
-                      );
-                      final name = input?.trim();
-                      if (!mounted ||
-                          name == null ||
-                          name.isEmpty ||
-                          name == current) {
-                        return;
-                      }
-                      await perform(() async {
-                        final saved = await api.request(
-                          'profile',
-                          method: 'PUT',
-                          body: {'name': name},
-                        );
-                        if (mounted)
-                          setState(() => profile = Future.value(saved));
-                      });
-                    },
+            final avatar = snapshot.data?['avatar'] as String?;
+            return Column(
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: MemberAvatar(avatar, size: 44),
+                  title: const Text('自分のアイコン'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: busy || !snapshot.hasData
+                      ? null
+                      : () async {
+                          final selected = await pickMemberAvatar(
+                            context,
+                            avatar,
+                          );
+                          if (!mounted ||
+                              selected == null ||
+                              selected == avatar) {
+                            return;
+                          }
+                          await perform(() async {
+                            final saved = await api.request(
+                              'profile',
+                              method: 'PUT',
+                              body: {'avatar': selected},
+                            );
+                            if (mounted) {
+                              setState(() => profile = Future.value(saved));
+                            }
+                          });
+                        },
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('ニックネーム'),
+                  subtitle: current.isEmpty ? null : Text(current),
+                  trailing: const Icon(Icons.edit_outlined),
+                  onTap:
+                      busy || snapshot.connectionState != ConnectionState.done
+                      ? null
+                      : () async {
+                          final input = await textDialog(
+                            context,
+                            'ニックネームを変更',
+                            label: 'ニックネーム',
+                            initial: current,
+                          );
+                          final name = input?.trim();
+                          if (!mounted ||
+                              name == null ||
+                              name.isEmpty ||
+                              name == current) {
+                            return;
+                          }
+                          await perform(() async {
+                            final saved = await api.request(
+                              'profile',
+                              method: 'PUT',
+                              body: {'name': name},
+                            );
+                            if (mounted) {
+                              setState(() => profile = Future.value(saved));
+                            }
+                          });
+                        },
+                ),
+              ],
             );
           },
         ),
