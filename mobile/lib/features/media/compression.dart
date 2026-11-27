@@ -26,6 +26,14 @@ class Compression {
     return picked == null ? null : compress(picked, video: video);
   }
 
+  Future<Compressed?> capturePhoto() async {
+    final picked = await ImagePicker().pickImage(
+      source: ImageSource.camera,
+      requestFullMetadata: false,
+    );
+    return picked == null ? null : compress(picked, video: false);
+  }
+
   Future<Compressed?> pickMedia() async {
     final picked = await ImagePicker().pickMedia();
     if (picked == null) return null;

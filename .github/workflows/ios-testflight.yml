@@ -138,6 +138,7 @@ jobs:
         run: |
           set -euo pipefail
           flutter build ipa --release --no-pub --build-number "$BUILD_NUMBER" \
+            --dart-define=APP_DISTRIBUTION=testflight \
             --dart-define-from-file="$RUNNER_TEMP/family-ios-dev.json" \
             --export-options-plist="$RUNNER_TEMP/family-export.plist"
           shopt -s nullglob

@@ -35,6 +35,11 @@ export const string = (doc: Doc | null, key: string) => doc?.fields?.[key]?.stri
 export const integer = (doc: Doc | null, key: string) => Number(doc?.fields?.[key]?.integerValue ?? (doc ? NaN : 0))
 export const s = (stringValue: string) => ({ stringValue })
 export const n = (value: number) => ({ integerValue: String(value) })
+export const formerAlbums = (index: Doc | null): string[] =>
+  JSON.parse(string(index, 'formerAlbums') ?? '[]')
+export const usageFields = (doc: Doc | null) => Object.fromEntries(
+  Object.entries(doc?.fields ?? {}).filter(([key]) => ['usageDay', 'usageToday', 'usageTotal', 'usageEnd'].includes(key)),
+)
 const active = { booleanValue: true }
 const inviteLifetime = 24 * 60 * 60 * 1000
 const familyMemberLimit = 10
@@ -153,6 +158,11 @@ export class Firestore implements Store, FamilyStore {
     const invite = await this.get('family_invites/' + code)
     const role = string(invite, 'role')
     const usedBy = string(invite, 'usedBy')
+    const family = string(invite, 'familyId')
+    const issuer = string(invite, 'issuer')
+    if (family && issuer && !await this.validInviteIssuer(invite!, family, issuer)) {
+      throw new HttpError(404, 'invite unavailable')
+    }
     if ((role !== 'parent' && role !== 'paternal' && role !== 'maternal') ||
         (usedBy ? usedBy !== uid : !(Date.parse(string(invite, 'expiresAt') ?? '') > Date.now()))) {
       throw new HttpError(404, 'invite unavailable')
@@ -168,7 +178,8 @@ export class Firestore implements Store, FamilyStore {
     const index = 'family_memberships/' + user
     return this.transaction<FamilyMembership>(async tx => {
       if ((await this.retirementMarker(uid, tx)).existing) throw new HttpError(403, 'account inactive')
-      if (await this.get(index, tx)) throw new HttpError(409, 'already belongs to a family')
+      const previous = await this.get(index, tx)
+      if (string(previous, 'familyId')) throw new HttpError(409, 'already belongs to a family')
       return { result: { id, name, role: 'admin', ...(profile ? { relationship: profile.relationship } : {}) }, writes: [
         this.write(path, { name: s(name), memberCount: n(1) }, true),
         this.write(path + '/members/' + user, { role: s('admin'), active,
@@ -177,20 +188,29 @@ export class Firestore implements Store, FamilyStore {
           this.write('profiles/' + user, { name: s(profile.nickname) }),
           this.write(path + '/children/' + child, { name: s(profile.childName), birthday: s(profile.birthday) }, true),
         ] : []),
-        this.write(index, { familyId: s(id) }, true),
+        this.write(index, { ...previous?.fields, familyId: s(id) }, !previous),
       ] }
     })
+  }
+
+  private async validInviteIssuer(invite: Doc, family: string, issuer: string, tx?: string) {
+    const member = await this.get('families/' + family + '/members/' + issuer, tx)
+    return this.familyMember(member)?.role === 'admin' &&
+      string(invite, 'issuerGeneration') === string(member, 'inviteGeneration')
   }
 
   async createInvite(uid: string, family: string, role: InviteRole): Promise<FamilyInvite> {
     const path = 'families/' + family
     const code = crypto.randomUUID().replaceAll('-', '')
     return this.transaction(async tx => {
-      const member = this.familyMember(await this.get(path + '/members/' + userKey(uid), tx))
+      const doc = await this.get(path + '/members/' + userKey(uid), tx)
+      const member = this.familyMember(doc)
       if (member?.role !== 'admin') throw new HttpError(403, 'family admin required')
       const expiresAt = new Date(Date.now() + inviteLifetime).toISOString()
+      const generation = string(doc, 'inviteGeneration')
       return { result: { code, expiresAt }, writes: [
-        this.write('family_invites/' + code, { familyId: s(family), issuer: s(userKey(uid)), role: s(role), expiresAt: s(expiresAt) }, true),
+        this.write('family_invites/' + code, { familyId: s(family), issuer: s(userKey(uid)),
+          ...(generation ? { issuerGeneration: s(generation) } : {}), role: s(role), expiresAt: s(expiresAt) }, true),
       ] }
     })
   }
@@ -218,12 +238,16 @@ export class Firestore implements Store, FamilyStore {
       const name = string(family, 'name')
       if (!family || !name) throw new HttpError(404, 'invite unavailable')
       const memberPath = familyPath + '/members/' + user
+      const issuer = string(invite, 'issuer')
+      if (issuer && !await this.validInviteIssuer(invite, id, issuer, tx)) {
+        throw new HttpError(404, 'invite unavailable')
+      }
       if (usedBy === uid && string(existing, 'familyId') === id) {
         const doc = await this.get(memberPath, tx)
         const member = this.familyMember(doc)
         if (member) return { result: { family: this.describeMembership(id, name, member, doc), joined: false }, writes: [] }
       }
-      if (existing) throw new HttpError(409, 'already belongs to a family')
+      if (string(existing, 'familyId')) throw new HttpError(409, 'already belongs to a family')
       if (usedBy) throw new HttpError(404, 'invite unavailable')
       const count = integer(family, 'memberCount')
       if (!Number.isSafeInteger(count) || count < 1) throw new HttpError(503, 'invalid family member count')
@@ -232,14 +256,17 @@ export class Firestore implements Store, FamilyStore {
       if (profile && (role === 'parent') !== chosenParent) {
         throw new HttpError(400, 'relationship does not match invitation')
       }
+      const previous = await this.get(memberPath, tx)
+      if (this.familyMember(previous)) throw new HttpError(409, 'already belongs to a family')
       const member: Member = role === 'parent' ? { role: 'admin' } : { role: 'grandparent', side: role }
       return { result: { family: { id, name, ...member, ...(profile ? { relationship: profile.relationship } : {}) }, joined: true }, writes: [
         this.write(familyPath, { ...family.fields, memberCount: n(count + 1) }),
         this.write(memberPath, {
-          role: s(member.role), active, joinedVia: s(code), ...(member.side ? { side: s(member.side) } : {}),
+          ...usageFields(previous), role: s(member.role), active, joinedVia: s(code), inviteGeneration: s(code),
+          ...(member.side ? { side: s(member.side) } : {}),
           ...(profile ? { relationship: s(profile.relationship) } : {}),
-        }, true),
-        this.write(index, { familyId: s(id) }, true),
+        }, !previous),
+        this.write(index, { ...existing?.fields, familyId: s(id) }, !existing),
         this.write(invitePath, { ...invite.fields, usedBy: s(uid) }),
         ...(profile ? [this.write('profiles/' + user, { name: s(profile.nickname) })] : []),
       ] }

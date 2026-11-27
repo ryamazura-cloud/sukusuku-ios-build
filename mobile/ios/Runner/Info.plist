@@ -4,6 +4,8 @@
 <dict>
 	<key>FirebaseMessagingInstallationIdEnabled</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>家族のアルバムに投稿する写真を撮影します。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>家族のアルバムに投稿する写真と動画を選びます。</string>
 	<key>UIBackgroundModes</key>

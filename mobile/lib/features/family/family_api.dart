@@ -225,6 +225,7 @@ class FamilyApiException implements Exception {
 
   String get message => switch ((status, reason)) {
     (400, 'relationship does not match invitation') => '招待内容に合う間柄を選んでください。',
+    (409, 'cannot remove yourself') => 'ご自身の退出はアカウントとデータの削除から行ってください。',
     (409, 'notification device not registered') => '先に端末への通知をオンにして保存してください。',
     (429, 'notification test rate limited') => 'テスト通知は30秒後にもう一度送れます。',
     (503, 'notification delivery THIRD_PARTY_AUTH_ERROR') =>

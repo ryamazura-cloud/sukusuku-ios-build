@@ -10,6 +10,8 @@ import 'package:go_router/go_router.dart';
 import '../album/album_api.dart';
 import '../album/album_screen.dart';
 import '../album/album_widgets.dart';
+import '../album/foreground_usage.dart';
+import '../album/update_banner.dart';
 import '../album/settings_screens.dart';
 import '../auth/auth.dart';
 import '../notifications/probe.dart';
@@ -162,6 +164,15 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
         .showSnackBar(const SnackBar(content: Text('アカウントとデータの削除が完了しました。')));
   }
 
+  void membershipRemoved() {
+    if (!mounted) return;
+    setState(() {
+      completedFamily = null;
+      creating = false;
+      entry = load();
+    });
+  }
+
   Future<void> resumeDeletion() async {
     setState(() => deleting = true);
     try {
@@ -213,6 +224,8 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
       final family = completedFamily ?? value.family;
       if (family != null) {
         return _AlbumTabs(
+          key: ValueKey(family.id),
+          onRemoved: membershipRemoved,
           api: AlbumApi(api, family),
           base: widget.base,
           onDeleted: finishDeletion,
@@ -246,6 +259,8 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
 
 class _AlbumTabs extends StatefulWidget {
   const _AlbumTabs({
+    super.key,
+    required this.onRemoved,
     required this.api,
     required this.base,
     required this.onDeleted,
@@ -253,6 +268,7 @@ class _AlbumTabs extends StatefulWidget {
   final AlbumApi api;
   final Uri base;
   final Future<void> Function() onDeleted;
+  final VoidCallback onRemoved;
 
   @override
   State<_AlbumTabs> createState() => _AlbumTabsState();
@@ -260,6 +276,14 @@ class _AlbumTabs extends StatefulWidget {
 
 class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   int tab = 0;
+  final distribution = AlbumUpdate.current;
+  int updateBuild = 0;
+  int dismissedBuild = 0;
+  bool checkingUpdate = false;
+  bool checkingMembership = false;
+  late final usage = ForegroundUsage(widget.api, () {
+    if (mounted) widget.onRemoved();
+  });
   bool openedSettings = false;
   StreamSubscription<String>? tokenUpdates;
   StreamSubscription<RemoteMessage>? foregroundNotices;
@@ -295,6 +319,9 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
       });
     }
     unawaited(syncToken());
+    unawaited(checkUpdate());
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed)
+      usage.resume();
   }
 
   Future<void> enableForegroundPresentation(FirebaseMessaging messaging) async {
@@ -311,7 +338,44 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(syncToken());
+    if (state == AppLifecycleState.resumed) {
+      usage.resume();
+      unawaited(syncToken());
+      unawaited(checkUpdate());
+      unawaited(checkMembership());
+    } else {
+      usage.pause();
+    }
+  }
+
+  Future<void> checkUpdate() async {
+    final channel = distribution;
+    if (channel == null || checkingUpdate) return;
+    checkingUpdate = true;
+    try {
+      final installed = await AlbumUpdate.installedBuild();
+      if (installed == null || installed < 1 || !mounted) return;
+      final latest = await channel.latestBuild(widget.base);
+      if (mounted)
+        setState(() => updateBuild = latest > installed ? latest : 0);
+    } catch (_) {
+      // The album remains available when the update endpoint cannot be reached.
+    } finally {
+      checkingUpdate = false;
+    }
+  }
+
+  Future<void> checkMembership() async {
+    if (checkingMembership) return;
+    checkingMembership = true;
+    try {
+      final family = await widget.api.api.current();
+      if (mounted && family?.id != widget.api.family.id) widget.onRemoved();
+    } catch (_) {
+      // The album API still enforces permissions for every request.
+    } finally {
+      checkingMembership = false;
+    }
   }
 
   Future<void> syncToken([String? updatedToken]) async {
@@ -327,6 +391,7 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    usage.pause();
     unawaited(tokenUpdates?.cancel());
     unawaited(foregroundNotices?.cancel());
     super.dispose();
@@ -337,7 +402,19 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
     body: IndexedStack(
       index: tab,
       children: [
-        AlbumScreen(widget.api, active: tab == 0),
+        AlbumScreen(
+          widget.api,
+          active: tab == 0,
+          updateBanner:
+              distribution != null &&
+                  updateBuild > 0 &&
+                  updateBuild != dismissedBuild
+              ? UpdateBanner(
+                  distribution!,
+                  onDismiss: () => setState(() => dismissedBuild = updateBuild),
+                )
+              : null,
+        ),
         if (tab == 1) NoticesScreen(widget.api) else const SizedBox(),
         if (openedSettings)
           FamilyScreen(widget.base, embedded: true, onDeleted: widget.onDeleted)

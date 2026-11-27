@@ -118,7 +118,7 @@ class _ChildScreenState extends State<ChildScreen> {
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            if (widget.api.family.canPost)
+            if (widget.api.family.canInvite)
               FilledButton(
                 onPressed: busy ? null : () => edit(),
                 child: const Text('子どもを登録'),
@@ -133,7 +133,7 @@ class _ChildScreenState extends State<ChildScreen> {
                 title: Text(item['name'] as String),
                 subtitle: Text(item['birthday'] as String),
                 leading: ChildAvatar(item['avatar'] as String?),
-                trailing: widget.api.family.canPost
+                trailing: widget.api.family.canInvite
                     ? PopupMenuButton<String>(
                         enabled: !busy,
                         itemBuilder: (_) => [
@@ -201,6 +201,35 @@ class _MembersScreenState extends State<MembersScreen> {
   late var data = widget.api.get('members');
   bool busy = false;
 
+  String duration(Object? seconds) {
+    final minutes = ((seconds as num?)?.toInt() ?? 0) ~/ 60;
+    if (minutes == 0) return '1分未満';
+    final hours = minutes ~/ 60;
+    return hours == 0 ? '$minutes分' : '$hours時間${minutes % 60}分';
+  }
+
+  Future<void> removeMember(AlbumRow member) async {
+    if (busy) return;
+    final name = member['name'] as String;
+    final who = name.isEmpty ? 'このメンバー' : name;
+    if (!await confirm(
+          context,
+          'アルバムから退出させる',
+          '$whoはこのアルバムを利用できなくなります。これまでの投稿とコメントは残ります。',
+        ) ||
+        !mounted)
+      return;
+    setState(() => busy = true);
+    try {
+      await widget.api.change('members/${member['id']}', 'DELETE');
+      if (mounted) setState(() => data = widget.api.get('members'));
+    } catch (failure) {
+      if (mounted) showFailure(context, failure);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
   Future<void> correctRole(AlbumRow member, InviteRole role) async {
     final name = member['name'] as String;
     final who = name.isEmpty ? 'このメンバー' : name;
@@ -223,7 +252,19 @@ class _MembersScreenState extends State<MembersScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('家族メンバー')),
+    appBar: AppBar(
+      title: const Text('家族メンバー'),
+      actions: [
+        if (widget.api.family.canInvite)
+          IconButton(
+            tooltip: '家族メンバーを更新',
+            onPressed: busy
+                ? null
+                : () => setState(() => data = widget.api.get('members')),
+            icon: const Icon(Icons.refresh),
+          ),
+      ],
+    ),
     body: FutureBuilder<AlbumRow>(
       future: data,
       builder: (context, snapshot) {
@@ -236,6 +277,11 @@ class _MembersScreenState extends State<MembersScreen> {
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
+            if (widget.api.family.canInvite)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text('利用時間はアプリを表示していた時間の目安です。「今日」は日本時間で集計します。'),
+              ),
             for (final item in rows(snapshot.data?['members']))
               ListTile(
                 title: Text(
@@ -243,31 +289,49 @@ class _MembersScreenState extends State<MembersScreen> {
                       ? '表示名が未設定'
                       : item['name'] as String,
                 ),
-                subtitle: Text(
-                  relationshipNames[item['relationship']] ??
-                      switch ((item['role'], item['side'])) {
-                        ('admin', _) => '管理者',
-                        ('parent', _) => '親',
-                        ('grandparent', 'paternal') => '父方の祖父母',
-                        _ => '母方の祖父母',
-                      },
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      relationshipNames[item['relationship']] ??
+                          switch ((item['role'], item['side'])) {
+                            ('admin', _) => '管理者',
+                            ('parent', _) => '親',
+                            ('grandparent', 'paternal') => '父方の祖父母',
+                            _ => '母方の祖父母',
+                          },
+                    ),
+                    if (widget.api.family.canInvite && item['usage'] is Map)
+                      Text(
+                        '今日 ${duration(item['usage']['todaySeconds'])}  ·  累計 ${duration(item['usage']['totalSeconds'])}',
+                      ),
+                  ],
                 ),
-                trailing:
-                    widget.api.family.canInvite && item['role'] == 'grandparent'
-                    ? PopupMenuButton<InviteRole>(
+                trailing: widget.api.family.canInvite && item['mine'] == false
+                    ? PopupMenuButton<String>(
                         enabled: !busy,
-                        tooltip: '家族の区分',
-                        onSelected: (role) => correctRole(item, role),
-                        itemBuilder: (_) => [
-                          for (final role in [
-                            InviteRole.paternal,
-                            InviteRole.maternal,
-                          ])
-                            if (item['side'] != role.name)
-                              PopupMenuItem(
-                                value: role,
-                                child: Text('${role.label}に修正'),
+                        tooltip: 'メンバーの操作',
+                        onSelected: (action) => action == 'remove'
+                            ? removeMember(item)
+                            : correctRole(
+                                item,
+                                InviteRole.values.byName(action),
                               ),
+                        itemBuilder: (_) => [
+                          if (item['role'] == 'grandparent')
+                            for (final role in [
+                              InviteRole.paternal,
+                              InviteRole.maternal,
+                            ])
+                              if (item['side'] != role.name)
+                                PopupMenuItem(
+                                  value: role.name,
+                                  child: Text('${role.label}に修正'),
+                                ),
+                          const PopupMenuItem(
+                            value: 'remove',
+                            child: Text('アルバムから退出させる'),
+                          ),
                         ],
                       )
                     : null,

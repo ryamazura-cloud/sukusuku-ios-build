@@ -1,5 +1,5 @@
 import { HttpError, mayPost, mayView, reserveBytes, type MediaType, type Scope } from './domain.ts'
-import { Firestore, FirestorePrecondition, digest, integer, n, s, string, userKey, type Doc, type Write } from './firestore.ts'
+import { Firestore, FirestorePrecondition, digest, formerAlbums, integer, n, s, string, usageFields, userKey, type Doc, type Write } from './firestore.ts'
 
 type Actor = { uid: string; family: string }
 type Attachment = { id: string; type: MediaType }
@@ -15,6 +15,9 @@ const pushFields = (value: string, useFid: boolean) => ({
 export type PostInput = { body: string; scope: Scope; childIds: string[]; capturedAt: string }
 const ready = 'published'
 const now = () => new Date().toISOString()
+const japanOffset = 9 * 60 * 60 * 1000
+const japanDay = (timestamp: number) => new Date(timestamp + japanOffset).toISOString().slice(0, 10)
+const usageValue = (doc: Doc, key: string) => doc.fields?.[key] ? integer(doc, key) : 0
 const idOf = (doc: Doc) => doc.name.split('/').at(-1)!
 const timeId = () => Date.now().toString(36).padStart(10, '0') + '-' + crypto.randomUUID()
 const flags = { booleanValue: true }
@@ -102,16 +105,74 @@ export class FamilyContent extends Firestore {
   }
 
   async members(actor: Actor) {
-    await this.member(actor)
-    const list: { id: string; name: string; role: string; side?: string; relationship?: string }[] = []
+    const { member: viewer } = await this.member(actor)
+    const today = japanDay(Date.now())
+    const list: { id: string; name: string; role: string; side?: string; relationship?: string;
+      mine: boolean; usage?: { todaySeconds: number; totalSeconds: number } }[] = []
     for await (const doc of this.documents(this.family(actor) + '/members')) {
       const member = this.familyMember(doc)
       if (!member) continue
       const id = idOf(doc)
       const profile = await this.get('profiles/' + id)
-      list.push({ id, name: string(profile, 'name') ?? '', ...member, relationship: string(doc, 'relationship') })
+      list.push({ id, name: string(profile, 'name') ?? '', ...member, relationship: string(doc, 'relationship'),
+        mine: id === userKey(actor.uid),
+        ...(viewer.role === 'admin' ? { usage: {
+          todaySeconds: string(doc, 'usageDay') === today ? Math.floor(usageValue(doc, 'usageToday') / 1000) : 0,
+          totalSeconds: Math.floor(usageValue(doc, 'usageTotal') / 1000),
+        } } : {}),
+      })
     }
     return list
+  }
+
+  async recordUsage(actor: Actor, start: number, end: number) {
+    const received = Date.now()
+    if (end > received + 5000 || start < received - 5 * 60_000) {
+      throw new HttpError(400, 'usage interval outside reporting window')
+    }
+    return this.transaction(async tx => {
+      const { doc } = await this.member(actor, tx)
+      const from = Math.max(start, usageValue(doc, 'usageEnd'))
+      if (from >= end) return { result: undefined, writes: [] }
+      const today = japanDay(received)
+      const midnight = Date.parse(today + 'T00:00:00+09:00')
+      const todaysDuration = Math.max(0, Math.min(end, midnight + 86_400_000) - Math.max(from, midnight))
+      return { result: undefined, writes: [this.write(this.memberPath(actor), {
+        ...doc.fields,
+        usageDay: s(today),
+        usageToday: n((string(doc, 'usageDay') === today ? usageValue(doc, 'usageToday') : 0) + todaysDuration),
+        usageTotal: n(usageValue(doc, 'usageTotal') + end - from),
+        usageEnd: n(end),
+      })] }
+    })
+  }
+
+  async removeMember(actor: Actor, target: string) {
+    const user = userKey(actor.uid)
+    if (target === user) throw new HttpError(409, 'cannot remove yourself')
+    const familyPath = this.family(actor)
+    const path = familyPath + '/members/' + target
+    await this.transaction(async tx => {
+      if ((await this.member(actor, tx)).member.role !== 'admin') {
+        throw new HttpError(403, 'administrator required')
+      }
+      const targetMember = await this.get(path, tx)
+      if (!this.familyMember(targetMember)) return { result: undefined, writes: [] }
+      const indexPath = 'family_memberships/' + target
+      const index = await this.get(indexPath, tx)
+      const family = await this.get(familyPath, tx)
+      const count = integer(family, 'memberCount')
+      if (!family || !Number.isSafeInteger(count) || count <= 1 || string(index, 'familyId') !== actor.family) {
+        throw new HttpError(503, 'member count invalid')
+      }
+      const invite = string(targetMember, 'joinedVia')
+      return { result: undefined, writes: [
+        this.write(path, { ...usageFields(targetMember), active: { booleanValue: false } }),
+        this.write(indexPath, { formerAlbums: s(JSON.stringify([...new Set([...formerAlbums(index), actor.family])])) }),
+        this.write(familyPath, { ...family.fields, memberCount: n(count - 1) }),
+        ...(invite ? [this.remove('family_invites/' + invite)] : []),
+      ] }
+    })
   }
 
   async transfer(actor: Actor, successor: string) {
@@ -417,14 +478,13 @@ export class FamilyContent extends Firestore {
   async comment(actor: Actor, id: string, body: string | null, commentId?: string) {
     const key = commentId ?? timeId()
     const event = await this.transaction(async tx => {
-      const { doc, path } = await this.post(actor, id, tx)
+      const { doc, path, member } = await this.post(actor, id, tx)
       const user = userKey(actor.uid)
       const location = path + '/comments/' + key
       if (commentId) {
         const previous = await this.get(location, tx)
         if (!previous) throw new HttpError(404, 'comment not found')
-        const admin = (await this.member(actor, tx)).member.role === 'admin'
-        if (string(previous, 'author') !== user && !(body === null && admin)) {
+        if (string(previous, 'author') !== user && !(body === null && member.role === 'admin')) {
           throw new HttpError(403, 'comment author required')
         }
         return { result: null, writes: [body === null ? this.remove(location)
@@ -693,19 +753,24 @@ export class FamilyContent extends Firestore {
     const user = userKey(uid)
     const membershipPath = 'family_memberships/' + user
     const codeIndex = 'account_deletion_codes/' + user
-    const { family, closesAlbum, marker, cursor, nickname } = await this.transaction(async tx => {
+    const { family, closesAlbum, marker, cursor, nickname, remaining } = await this.transaction(async tx => {
       if (code && string(await this.get(codeIndex, tx), 'hash') !== await digest(code)) {
         throw new HttpError(404, 'deletion code unavailable')
       }
       const { path: marker, existing } = await this.retirementMarker(uid, tx)
       if (existing) return { result: { family: string(existing, 'family') ?? '', marker,
         closesAlbum: existing.fields?.closesAlbum?.booleanValue === true,
-        cursor: string(existing, 'cursor') ?? '', nickname: string(existing, 'nickname') }, writes: [] }
-      const id = string(await this.get(membershipPath, tx), 'familyId') ?? ''
+        cursor: string(existing, 'cursor') ?? '', nickname: string(existing, 'nickname'),
+        remaining: asJson<string[]>(existing, 'remaining') }, writes: [] }
+      const index = await this.get(membershipPath, tx)
+      const id = string(index, 'familyId') ?? ''
+      const history = [...new Set(formerAlbums(index))].filter(album => album !== id)
+      const familyToErase = id || history.shift() || ''
       const closesAlbum = id ? await this.closesAlbum(uid, id, tx) : false
       if (closesAlbum && !allowAlbumClosure) throw new HttpError(409, 'confirm album closure')
       const nickname = string(await this.get('profiles/' + user, tx), 'name')
-      const writes: Write[] = [this.write(marker, { family: s(id), closesAlbum: { booleanValue: closesAlbum },
+      const writes: Write[] = [this.write(marker, { family: s(familyToErase), closesAlbum: { booleanValue: closesAlbum },
+        remaining: s(JSON.stringify(history)),
         ...(nickname ? { nickname: s(nickname) } : {}),
       }, true)]
       if (id) {
@@ -719,7 +784,11 @@ export class FamilyContent extends Firestore {
           for await (const candidate of this.documents(familyPath + '/members', tx)) {
             const key = idOf(candidate)
             if (this.familyMember(candidate)) {
-              writes.push(this.remove('family_memberships/' + key))
+              const candidateIndex = 'family_memberships/' + key
+              const former = key === user ? [] : formerAlbums(await this.get(candidateIndex, tx))
+              writes.push(former.length
+                ? this.write(candidateIndex, { formerAlbums: s(JSON.stringify(former)) })
+                : this.remove(candidateIndex))
               writes.push(this.write(familyPath + '/members/' + key, { active: { booleanValue: false } }))
               const used = string(candidate, 'joinedVia')
               if (used) writes.push(this.remove('family_invites/' + used))
@@ -737,23 +806,27 @@ export class FamilyContent extends Firestore {
           writes.push(this.remove(membershipPath))
         }
       }
+      if (!id) writes.push(this.remove(membershipPath))
       writes.push(this.remove('profiles/' + user))
-      return { result: { family: id, closesAlbum, marker, cursor: '', nickname }, writes }
+      return { result: { family: familyToErase, closesAlbum, marker, cursor: '', nickname, remaining: history }, writes }
     })
     if (family) {
       const next = await this.eraseRetiredPosts(family, user, closesAlbum, bucket, cursor)
       if (!next) await this.eraseRetiredAlbumData(family, user, closesAlbum, nickname)
+      const pending = next ? family : remaining[0] ?? ''
+      const later = next ? remaining : remaining.slice(1)
       const advanced = await this.transaction(async tx => {
         const current = await this.get(marker, tx)
         if (string(current, 'family') !== family || (string(current, 'cursor') ?? '') !== cursor) {
           return { result: false, writes: [] }
         }
         return { result: true, writes: [this.write(marker, {
-          closesAlbum: { booleanValue: closesAlbum },
-          ...(next ? { family: s(family), cursor: s(next), ...(nickname ? { nickname: s(nickname) } : {}) } : {}),
+          closesAlbum: { booleanValue: !!next && closesAlbum },
+          ...(pending ? { family: s(pending), cursor: s(next ?? ''), remaining: s(JSON.stringify(later)),
+            ...(nickname ? { nickname: s(nickname) } : {}) } : {}),
         })] }
       })
-      if (!advanced || next) return false
+      if (!advanced || pending) return false
     }
     await this.forgetFirebaseUser(uid)
     await this.transaction(async tx => {

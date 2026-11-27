@@ -27,6 +27,21 @@ class MainActivity : FlutterActivity() {
                 NotificationChannel("sukusuku_album", "アルバムのお知らせ", NotificationManager.IMPORTANCE_HIGH)
             )
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "biz.wisemap.family_share/app")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "buildNumber") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                val info = packageManager.getPackageInfo(packageName, 0)
+                @Suppress("DEPRECATION")
+                val version = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    info.versionCode.toLong()
+                }
+                result.success(version)
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "biz.wisemap.family_share/video")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

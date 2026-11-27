@@ -17,6 +17,9 @@ export type Bindings = {
   IOS_TEAM_ID?: string
   ANDROID_STORE_URL?: string
   IOS_STORE_URL?: string
+  ANDROID_LATEST_BUILD?: string
+  IOS_LATEST_BUILD?: string
+  TESTFLIGHT_LATEST_BUILD?: string
 }
 type Dependencies = {
   uid: (header: string | undefined, project: string) => Promise<string>
@@ -92,6 +95,14 @@ export function createApp(dependencies: Dependencies) {
   })
   registerInviteLinks(app)
   app.get('/health', c => c.json({ status: 'ok' }, 200, noCache))
+  app.get('/app-update', c => {
+    const distribution = c.req.query('distribution')
+    const value = distribution === 'android' ? c.env.ANDROID_LATEST_BUILD
+      : distribution === 'app-store' ? c.env.IOS_LATEST_BUILD
+      : distribution === 'testflight' ? c.env.TESTFLIGHT_LATEST_BUILD : undefined
+    const latestBuild = Number(value)
+    return c.json({ latestBuild: Number.isSafeInteger(latestBuild) && latestBuild > 0 ? latestBuild : 0 }, 200, noCache)
+  })
 
   const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
     if (c.env.APP_ENV !== 'dev') throw new HttpError(404, 'route disabled')

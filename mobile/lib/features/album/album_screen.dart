@@ -10,10 +10,18 @@ import '../media/compression.dart';
 import 'post_editor.dart';
 import 'post_screen.dart';
 
+enum _PostSource { camera, library }
+
 class AlbumScreen extends StatefulWidget {
-  const AlbumScreen(this.api, {super.key, this.active = true});
+  const AlbumScreen(
+    this.api, {
+    super.key,
+    this.active = true,
+    this.updateBanner,
+  });
   final AlbumApi api;
   final bool active;
+  final Widget? updateBanner;
 
   @override
   State<AlbumScreen> createState() => _AlbumScreenState();
@@ -80,7 +88,31 @@ class _AlbumScreenState extends State<AlbumScreen> {
     setState(() => busy = true);
     Compressed? selected;
     try {
-      selected = await Compression().pickMedia();
+      final source = await showModalBottomSheet<_PostSource>(
+        context: context,
+        builder: (context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('カメラで撮影'),
+                onTap: () => Navigator.pop(context, _PostSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('ライブラリから選択'),
+                onTap: () => Navigator.pop(context, _PostSource.library),
+              ),
+            ],
+          ),
+        ),
+      );
+      if (!mounted || source == null) return;
+      final compression = Compression();
+      selected = source == _PostSource.camera
+          ? await compression.capturePhoto()
+          : await compression.pickMedia();
     } catch (failure) {
       if (mounted) showFailure(context, failure);
     } finally {
@@ -212,6 +244,8 @@ class _AlbumScreenState extends State<AlbumScreen> {
             : null,
         body: CustomScrollView(
           slivers: [
+            if (widget.updateBanner case final banner?)
+              SliverToBoxAdapter(child: banner),
             if (children.isNotEmpty)
               SliverPadding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),

@@ -100,6 +100,12 @@ test('family content stays private, supports discussion, and purges only the ret
       method, headers, body: file ? body : body ? JSON.stringify(body) : undefined,
     }), env)
   }
+  const update = (distribution: string) => app.fetch(new Request(
+    'https://example.invalid/app-update?distribution=' + distribution,
+  ), { ...env, ANDROID_LATEST_BUILD: '18', IOS_LATEST_BUILD: '', TESTFLIGHT_LATEST_BUILD: '32' })
+  assert.deepEqual(await (await update('android')).json(), { latestBuild: 18 })
+  assert.deepEqual(await (await update('testflight')).json(), { latestBuild: 32 })
+  assert.deepEqual(await (await update('app-store')).json(), { latestBuild: 0 })
   const anonAlbum = await request('anon-admin', '/v1/families', 'POST', {
     name: 'Test album', relationship: 'mother', nickname: 'Mama',
     childName: 'Baby', birthday: '2090-02-28',
@@ -215,6 +221,10 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await (await request('owner', path + '/discussion')).json()).reactions.love, 1)
   const initial = await (await request('owner', path + '/discussion')).json()
   const commentId = initial.comments[0].id
+  const commentPath = path + '/comments/' + commentId
+  assert.equal((await request('owner', commentPath, 'PUT', { body: 'Denied' })).status, 403)
+  assert.equal((await request('fatherSide', commentPath, 'PUT', { body: 'Edited' })).status, 200)
+  assert.equal((await (await request('owner', path + '/discussion')).json()).comments[0].body, 'Edited')
   const commentReaction = path + '/comments/' + commentId + '/reactions/like'
   assert.equal((await request('motherSide', commentReaction, 'PUT', { enabled: true })).status, 404)
   assert.equal((await request('owner', commentReaction, 'PUT', { enabled: true })).status, 200)
@@ -229,9 +239,41 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal((await getNotices('motherSide')).some(item => item.post === id), false)
   assert.equal((await request('owner', commentReaction, 'PUT', { enabled: false })).status, 200)
   assert.deepEqual((await (await request('owner', path + '/discussion')).json()).comments[0].reactions, {})
+  const episode = Date.now()
+  const usage = { start: episode - 65000, end: episode - 5000 }
+  assert.equal((await request('outsider', url + '/usage', 'PUT', usage)).status, 403)
+  assert.equal((await request('fatherSide', url + '/usage', 'PUT', usage)).status, 200)
+  assert.equal((await request('fatherSide', url + '/usage', 'PUT', usage)).status, 200)
+  assert.equal((await request('fatherSide', url + '/usage', 'PUT', { ...usage, start: episode - 80001 })).status, 400)
+  const memberList = async (uid: string) => (await (await request(uid, url + '/members')).json()).members
+  const father = (await memberList('owner')).find(item => item.id === userKey('fatherSide'))
+  assert.equal(father.usage.totalSeconds, 60)
+  assert.equal(father.mine, false)
+  assert.equal((await memberList('fatherSide')).find(item => item.mine).usage, undefined)
+  assert.equal((await request('owner', url + '/members/' + userKey('owner'), 'DELETE')).status, 409)
+  const fatherPath = url + '/members/' + userKey('fatherSide')
+  assert.equal((await request('motherSide', fatherPath, 'DELETE')).status, 403)
+  assert.equal((await request('owner', fatherPath, 'DELETE')).status, 200)
+  assert.equal((await request('owner', fatherPath, 'DELETE')).status, 200)
+  assert.equal((await request('fatherSide', object)).status, 403)
+  assert.equal((await request('fatherSide', url + '/usage', 'PUT', usage)).status, 403)
+  assert.equal((await (await request('fatherSide', '/v1/families/current')).json()).family, null)
+  assert.equal((await (await request('owner', path + '/discussion')).json()).comments[0].body, 'Edited')
+  assert.equal(removedAccounts.has('fatherSide'), false)
+  const rejoin = await db.createInvite('owner', family.id, 'paternal')
+  await db.joinFamily('fatherSide', rejoin.code)
+  assert.equal((await memberList('owner')).find(item => item.id === userKey('fatherSide')).usage.totalSeconds, 60)
+  const extraInvite = await db.createInvite('owner', family.id, 'paternal')
+  await db.joinFamily('otherViewer', extraInvite.code)
+  assert.equal((await request('otherViewer', commentPath, 'DELETE')).status, 403)
+  assert.equal((await request('otherViewer', commentPath, 'PUT', { body: 'Denied' })).status, 403)
+  assert.equal((await request('otherViewer', path + '/comments', 'POST', { body: 'Temporary' })).status, 201)
+  const temporary = (await (await request('owner', path + '/discussion')).json()).comments.find(item => item.body === 'Temporary')
+  assert.equal((await request('owner', path + '/comments/' + temporary.id, 'DELETE')).status, 200)
+  assert.equal((await request('owner', fatherPath, 'DELETE')).status, 200)
   assert.equal((await request('owner', path, 'PUT', { ...fields, scope: 'parents' })).status, 200)
-  assert.equal((await request('fatherSide', object)).status, 404)
-  assert.equal((await getNotices('fatherSide')).filter(item => item.kind === 'post').length, 0)
+  assert.equal((await request('fatherSide', object)).status, 403)
+  assert.equal((await request('fatherSide', url + '/notifications')).status, 403)
 
   assert.equal((await request('anon-admin', '/v1/account', 'DELETE')).status, 200)
   assert.equal((await request('anon-parent', '/v1/account', 'DELETE')).status, 409)

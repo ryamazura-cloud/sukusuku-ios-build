@@ -6,6 +6,18 @@ import UIKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let app = FlutterMethodChannel(
+      name: "biz.wisemap.family_share/app",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    app.setMethodCallHandler { call, result in
+      guard call.method == "buildNumber" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+      result(version.flatMap { Int($0) })
+    }
     let channel = FlutterMethodChannel(
       name: "biz.wisemap.family_share/video",
       binaryMessenger: engineBridge.applicationRegistrar.messenger()

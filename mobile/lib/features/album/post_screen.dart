@@ -536,6 +536,7 @@ class _PostScreenState extends State<PostScreen> {
                     item,
                     menu: item['mine'] == true || path.family.canInvite
                         ? PopupMenuButton<String>(
+                            tooltip: 'コメントの操作',
                             enabled: !busy,
                             onSelected: (value) async {
                               if (value == 'edit') {

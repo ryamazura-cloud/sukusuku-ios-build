@@ -337,6 +337,7 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
           },
         ),
         const SizedBox(height: 24),
+        const Text('アプリを画面に表示した時間は、家族アルバムの管理者が確認できます。'),
         OutlinedButton(
           onPressed: busy ? null : saveDeletionCode,
           child: const Text('削除用コードを発行'),
