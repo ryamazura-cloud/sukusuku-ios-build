@@ -38,5 +38,14 @@ void main() {
     await tester.tap(invite);
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('閉じる'));
+    await tester.pumpAndSettle();
+
+    for (final label in ['プライバシーポリシー', '利用規約']) {
+      final link = find.widgetWithText(TextButton, label);
+      await tester.ensureVisible(link);
+      await tester.pumpAndSettle();
+      expect(link.hitTestable(), findsOneWidget);
+    }
   });
 }

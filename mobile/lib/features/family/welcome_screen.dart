@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'legal_document.dart';
+
 class WelcomeScreen extends StatelessWidget {
   const WelcomeScreen({required this.onCreateAlbum, super.key});
 
@@ -123,6 +125,26 @@ class WelcomeScreen extends StatelessWidget {
                         ),
                         onPressed: () => _showInviteInstructions(context),
                         child: const Text('招待リンクから参加'),
+                      ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        children: [
+                          for (final document in LegalDocument.values)
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                foregroundColor: _brown,
+                              ),
+                              onPressed: () => document.open(context),
+                              child: Text(
+                                document.label,
+                                style: const TextStyle(
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),

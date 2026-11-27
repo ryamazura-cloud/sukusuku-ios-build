@@ -15,9 +15,6 @@ const pushFields = (value: string, useFid: boolean) => ({
 export type PostInput = { body: string; scope: Scope; childIds: string[]; capturedAt: string }
 const ready = 'published'
 const now = () => new Date().toISOString()
-const japanOffset = 9 * 60 * 60 * 1000
-const japanDay = (timestamp: number) => new Date(timestamp + japanOffset).toISOString().slice(0, 10)
-const usageValue = (doc: Doc, key: string) => doc.fields?.[key] ? integer(doc, key) : 0
 const idOf = (doc: Doc) => doc.name.split('/').at(-1)!
 const timeId = () => Date.now().toString(36).padStart(10, '0') + '-' + crypto.randomUUID()
 const flags = { booleanValue: true }
@@ -105,10 +102,9 @@ export class FamilyContent extends Firestore {
   }
 
   async members(actor: Actor) {
-    const { member: viewer } = await this.member(actor)
-    const today = japanDay(Date.now())
+    await this.member(actor)
     const list: { id: string; name: string; role: string; side?: string; relationship?: string;
-      mine: boolean; usage?: { todaySeconds: number; totalSeconds: number } }[] = []
+      mine: boolean }[] = []
     for await (const doc of this.documents(this.family(actor) + '/members')) {
       const member = this.familyMember(doc)
       if (!member) continue
@@ -116,35 +112,9 @@ export class FamilyContent extends Firestore {
       const profile = await this.get('profiles/' + id)
       list.push({ id, name: string(profile, 'name') ?? '', ...member, relationship: string(doc, 'relationship'),
         mine: id === userKey(actor.uid),
-        ...(viewer.role === 'admin' ? { usage: {
-          todaySeconds: string(doc, 'usageDay') === today ? Math.floor(usageValue(doc, 'usageToday') / 1000) : 0,
-          totalSeconds: Math.floor(usageValue(doc, 'usageTotal') / 1000),
-        } } : {}),
       })
     }
     return list
-  }
-
-  async recordUsage(actor: Actor, start: number, end: number) {
-    const received = Date.now()
-    if (end > received + 5000 || start < received - 5 * 60_000) {
-      throw new HttpError(400, 'usage interval outside reporting window')
-    }
-    return this.transaction(async tx => {
-      const { doc } = await this.member(actor, tx)
-      const from = Math.max(start, usageValue(doc, 'usageEnd'))
-      if (from >= end) return { result: undefined, writes: [] }
-      const today = japanDay(received)
-      const midnight = Date.parse(today + 'T00:00:00+09:00')
-      const todaysDuration = Math.max(0, Math.min(end, midnight + 86_400_000) - Math.max(from, midnight))
-      return { result: undefined, writes: [this.write(this.memberPath(actor), {
-        ...doc.fields,
-        usageDay: s(today),
-        usageToday: n((string(doc, 'usageDay') === today ? usageValue(doc, 'usageToday') : 0) + todaysDuration),
-        usageTotal: n(usageValue(doc, 'usageTotal') + end - from),
-        usageEnd: n(end),
-      })] }
-    })
   }
 
   async removeMember(actor: Actor, target: string) {

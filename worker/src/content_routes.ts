@@ -82,15 +82,6 @@ export function registerContent(
     await db(c).removeMember(actor(c), ensureId(c.req.param('member'), /^u-[\w-]{1,700}$/))
     return c.json({ ok: true }, 200, headers)
   })
-  app.put(family + '/usage', small, async c => {
-    const { start, end } = await json(c.req.raw)
-    if (typeof start !== 'number' || typeof end !== 'number' ||
-        !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start || end - start > 75_000) {
-      throw new HttpError(400, 'invalid usage interval')
-    }
-    await db(c).recordUsage(actor(c), start, end)
-    return c.json({ ok: true }, 200, headers)
-  })
   app.put(family + '/members/:member/grandparent', small, async c => {
     const { side } = await json(c.req.raw)
     if (side !== 'paternal' && side !== 'maternal') throw new HttpError(400, 'invalid grandparent side')

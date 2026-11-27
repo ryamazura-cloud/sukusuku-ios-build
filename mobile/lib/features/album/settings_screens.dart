@@ -201,13 +201,6 @@ class _MembersScreenState extends State<MembersScreen> {
   late var data = widget.api.get('members');
   bool busy = false;
 
-  String duration(Object? seconds) {
-    final minutes = ((seconds as num?)?.toInt() ?? 0) ~/ 60;
-    if (minutes == 0) return '1分未満';
-    final hours = minutes ~/ 60;
-    return hours == 0 ? '$minutes分' : '$hours時間${minutes % 60}分';
-  }
-
   Future<void> removeMember(AlbumRow member) async {
     if (busy) return;
     final name = member['name'] as String;
@@ -277,11 +270,6 @@ class _MembersScreenState extends State<MembersScreen> {
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            if (widget.api.family.canInvite)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text('利用時間はアプリを表示していた時間の目安です。「今日」は日本時間で集計します。'),
-              ),
             for (final item in rows(snapshot.data?['members']))
               ListTile(
                 title: Text(
@@ -289,23 +277,14 @@ class _MembersScreenState extends State<MembersScreen> {
                       ? '表示名が未設定'
                       : item['name'] as String,
                 ),
-                subtitle: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      relationshipNames[item['relationship']] ??
-                          switch ((item['role'], item['side'])) {
-                            ('admin', _) => '管理者',
-                            ('parent', _) => '親',
-                            ('grandparent', 'paternal') => '父方の祖父母',
-                            _ => '母方の祖父母',
-                          },
-                    ),
-                    if (widget.api.family.canInvite && item['usage'] is Map)
-                      Text(
-                        '今日 ${duration(item['usage']['todaySeconds'])}  ·  累計 ${duration(item['usage']['totalSeconds'])}',
-                      ),
-                  ],
+                subtitle: Text(
+                  relationshipNames[item['relationship']] ??
+                      switch ((item['role'], item['side'])) {
+                        ('admin', _) => '管理者',
+                        ('parent', _) => '親',
+                        ('grandparent', 'paternal') => '父方の祖父母',
+                        _ => '母方の祖父母',
+                      },
                 ),
                 trailing: widget.api.family.canInvite && item['mine'] == false
                     ? PopupMenuButton<String>(

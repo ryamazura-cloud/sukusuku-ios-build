@@ -10,7 +10,6 @@ import 'package:go_router/go_router.dart';
 import '../album/album_api.dart';
 import '../album/album_screen.dart';
 import '../album/album_widgets.dart';
-import '../album/foreground_usage.dart';
 import '../album/update_banner.dart';
 import '../album/settings_screens.dart';
 import '../auth/auth.dart';
@@ -281,9 +280,6 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   int dismissedBuild = 0;
   bool checkingUpdate = false;
   bool checkingMembership = false;
-  late final usage = ForegroundUsage(widget.api, () {
-    if (mounted) widget.onRemoved();
-  });
   bool openedSettings = false;
   StreamSubscription<String>? tokenUpdates;
   StreamSubscription<RemoteMessage>? foregroundNotices;
@@ -320,8 +316,6 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
     }
     unawaited(syncToken());
     unawaited(checkUpdate());
-    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed)
-      usage.resume();
   }
 
   Future<void> enableForegroundPresentation(FirebaseMessaging messaging) async {
@@ -339,12 +333,9 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      usage.resume();
       unawaited(syncToken());
       unawaited(checkUpdate());
       unawaited(checkMembership());
-    } else {
-      usage.pause();
     }
   }
 
@@ -391,7 +382,6 @@ class _AlbumTabsState extends State<_AlbumTabs> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    usage.pause();
     unawaited(tokenUpdates?.cancel());
     unawaited(foregroundNotices?.cancel());
     super.dispose();

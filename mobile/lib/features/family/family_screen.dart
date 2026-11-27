@@ -12,6 +12,7 @@ import '../album/album_widgets.dart';
 import '../album/settings_screens.dart';
 
 import 'family_api.dart';
+import 'legal_document.dart';
 
 class FamilyScreen extends ConsumerStatefulWidget {
   const FamilyScreen(
@@ -337,7 +338,26 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
           },
         ),
         const SizedBox(height: 24),
-        const Text('アプリを画面に表示した時間は、家族アルバムの管理者が確認できます。'),
+        Text('アプリについて', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        Card.outlined(
+          margin: EdgeInsets.zero,
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              for (final document in LegalDocument.values) ...[
+                if (document != LegalDocument.values.first)
+                  const Divider(height: 1),
+                ListTile(
+                  title: Text(document.label),
+                  trailing: const Icon(Icons.open_in_new, size: 18),
+                  onTap: () => document.open(context),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 24),
         OutlinedButton(
           onPressed: busy ? null : saveDeletionCode,
           child: const Text('削除用コードを発行'),
