@@ -251,6 +251,8 @@ class _AlbumEntryState extends ConsumerState<AlbumEntry> {
       }
       return WelcomeScreen(
         onCreateAlbum: () => setState(() => creating = true),
+        inviteBase: widget.base,
+        onOpenInvite: (code) => context.go('/invite/$code'),
       );
     },
   );

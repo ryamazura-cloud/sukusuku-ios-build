@@ -20,8 +20,7 @@ class NotificationProbe {
       _registrationRequest(() async {
         final settings = await FirebaseMessaging.instance
             .getNotificationSettings();
-        if (settings.authorizationStatus != AuthorizationStatus.authorized &&
-            settings.authorizationStatus != AuthorizationStatus.provisional) {
+        if (!_canNotify(settings)) {
           return null;
         }
         return refreshedToken ?? await _token(settings);
@@ -37,11 +36,15 @@ class NotificationProbe {
     }
   }
 
+  bool _canNotify(NotificationSettings settings) =>
+      settings.authorizationStatus == AuthorizationStatus.authorized ||
+      settings.authorizationStatus == AuthorizationStatus.provisional;
+
   Future<String> _token(NotificationSettings settings) async {
-    final messaging = FirebaseMessaging.instance;
-    if (settings.authorizationStatus == AuthorizationStatus.denied) {
-      throw StateError('端末の通知が許可されていません。');
+    if (!_canNotify(settings)) {
+      throw StateError('端末の設定ですくすくの通知を許可してください。');
     }
+    final messaging = FirebaseMessaging.instance;
     if (defaultTargetPlatform == TargetPlatform.iOS) {
       String? apns;
       for (var attempt = 0; attempt < 20; attempt++) {

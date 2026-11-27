@@ -3,30 +3,81 @@ import 'package:flutter/material.dart';
 import 'legal_document.dart';
 
 class WelcomeScreen extends StatelessWidget {
-  const WelcomeScreen({required this.onCreateAlbum, super.key});
+  const WelcomeScreen({
+    required this.onCreateAlbum,
+    required this.inviteBase,
+    required this.onOpenInvite,
+    super.key,
+  });
 
   final VoidCallback onCreateAlbum;
+  final Uri inviteBase;
+  final ValueChanged<String> onOpenInvite;
   static const _ivory = Color(0xFFFFFCF6);
   static const _brown = Color(0xFF794D39);
   static const _ink = Color(0xFF38291F);
 
-  void _showInviteInstructions(BuildContext context) {
-    showDialog<void>(
+  String? _inviteCode(String? input) {
+    final uri = Uri.tryParse(input?.trim() ?? '');
+    if (uri == null ||
+        uri.scheme != inviteBase.scheme ||
+        uri.host != inviteBase.host ||
+        uri.port != inviteBase.port ||
+        uri.userInfo.isNotEmpty) {
+      return null;
+    }
+    return RegExp(r'^/invite/([a-f0-9]{32})$').firstMatch(uri.path)?.group(1);
+  }
+
+  Future<void> _showInviteInstructions(BuildContext context) async {
+    final code = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('招待リンクから参加'),
-        content: const Text(
-          'この画面を閉じて、家族から届いた招待リンクを開いてください。'
-          'リンクから「すくすく」を開き直すと、参加手続きに進めます。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('閉じる'),
+      builder: (context) {
+        final form = GlobalKey<FormState>();
+        String? enteredCode;
+        void submit() {
+          if (form.currentState!.validate()) {
+            Navigator.pop(context, enteredCode);
+          }
+        }
+
+        return AlertDialog(
+          title: const Text('招待リンクから参加'),
+          content: Form(
+            key: form,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('家族から届いた招待リンクをコピーして、ここに貼り付けてください。'),
+                const SizedBox(height: 12),
+                TextFormField(
+                  decoration: const InputDecoration(labelText: '招待リンク'),
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  textInputAction: TextInputAction.go,
+                  onFieldSubmitted: (_) => submit(),
+                  validator: (value) {
+                    enteredCode = _inviteCode(value);
+                    return enteredCode == null ? 'すくすくの招待リンクを入力してください。' : null;
+                  },
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
+          scrollable: true,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('閉じる'),
+            ),
+            FilledButton(onPressed: submit, child: const Text('続ける')),
+          ],
+        );
+      },
     );
+    if (context.mounted && code != null) onOpenInvite(code);
   }
 
   @override

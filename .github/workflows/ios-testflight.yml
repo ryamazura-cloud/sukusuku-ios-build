@@ -159,6 +159,8 @@ jobs:
           fi
           [[ "$(plutil -extract CFBundleIdentifier raw -o - "${bundles[0]}/Info.plist")" == biz.wisemap.familyShare ]]
           [[ "$(plutil -extract CFBundleVersion raw -o - "${bundles[0]}/Info.plist")" == "$BUILD_NUMBER" ]]
+          [[ "$(plutil -extract FirebaseMessagingInstallationIdEnabled raw -o - "${bundles[0]}/Info.plist")" == true ]]
+          [[ -n "$(plutil -extract NSCameraUsageDescription raw -o - "${bundles[0]}/Info.plist")" ]]
           [[ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.developer.associated-domains:0' "$entitlements")" == applinks:family-share-dev.wisemap.workers.dev ]]
       - uses: actions/upload-artifact@v4
         with:

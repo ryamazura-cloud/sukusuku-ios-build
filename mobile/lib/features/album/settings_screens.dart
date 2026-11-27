@@ -385,10 +385,7 @@ class _NoticesScreenState extends State<NoticesScreen> {
     if (busy) return;
     setState(() => busy = true);
     try {
-      final token = await NotificationProbe().existingToken();
-      if (token == null) {
-        throw StateError('端末の設定ですくすくの通知を許可してください。');
-      }
+      final token = await NotificationProbe().token();
       await widget.api.change('notification-settings', 'PUT', {'fid': token});
       await widget.api.change('notification-test', 'POST');
     } catch (failure) {
