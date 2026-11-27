@@ -216,14 +216,28 @@ test('family content stays private, supports discussion, and purges only the ret
   assert.equal(list.posts.length, 0)
   assert.equal((await getNotices('fatherSide')).filter(item => item.kind === 'post').length, 1)
   assert.equal((await getNotices('motherSide')).filter(item => item.post).length, 0)
+  const registrations = [
+    ['owner', 'author-device', ['comment']],
+    ['parent', 'eligible-device', ['comment']],
+    ['fatherSide', 'commenter-device', ['comment']],
+    ['motherSide', 'out-of-scope-device', ['comment']],
+  ] as const
+  for (const [user, token, preferences] of registrations) {
+    assert.equal((await request(user, settings, 'PUT', { token, preferences })).status, 200)
+  }
+  const pushCount = pushes.length
   assert.equal((await request('fatherSide', path + '/comments', 'POST', { body: 'Lovely' })).status, 201)
+  assert.deepEqual(pushes.slice(pushCount).map(push => push.token).sort(), ['author-device', 'eligible-device'])
   assert.equal((await request('fatherSide', path + '/reactions/love', 'PUT', { enabled: true })).status, 200)
   assert.equal((await (await request('owner', path + '/discussion')).json()).reactions.love, 1)
   const initial = await (await request('owner', path + '/discussion')).json()
   const commentId = initial.comments[0].id
   const commentPath = path + '/comments/' + commentId
   assert.equal((await request('owner', commentPath, 'PUT', { body: 'Denied' })).status, 403)
+  const pushCountBeforeEdit = pushes.length
   assert.equal((await request('fatherSide', commentPath, 'PUT', { body: 'Edited' })).status, 200)
+  assert.equal(pushes.length, pushCountBeforeEdit)
+  assert.equal((await request('parent', settings, 'PUT', { token: 'eligible-device', preferences: ['post'] })).status, 200)
   assert.equal((await (await request('owner', path + '/discussion')).json()).comments[0].body, 'Edited')
   const commentReaction = path + '/comments/' + commentId + '/reactions/like'
   assert.equal((await request('motherSide', commentReaction, 'PUT', { enabled: true })).status, 404)
@@ -266,7 +280,9 @@ test('family content stays private, supports discussion, and purges only the ret
   await db.joinFamily('otherViewer', extraInvite.code)
   assert.equal((await request('otherViewer', commentPath, 'DELETE')).status, 403)
   assert.equal((await request('otherViewer', commentPath, 'PUT', { body: 'Denied' })).status, 403)
+  const pushCountBeforeSecondComment = pushes.length
   assert.equal((await request('otherViewer', path + '/comments', 'POST', { body: 'Temporary' })).status, 201)
+  assert.deepEqual(pushes.slice(pushCountBeforeSecondComment).map(push => push.token), ['author-device'])
   const temporary = (await (await request('owner', path + '/discussion')).json()).comments.find(item => item.body === 'Temporary')
   assert.equal((await request('owner', path + '/comments/' + temporary.id, 'DELETE')).status, 200)
   assert.equal((await request('owner', fatherPath, 'DELETE')).status, 200)

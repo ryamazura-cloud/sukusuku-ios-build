@@ -447,8 +447,8 @@ export class FamilyContent extends Firestore {
 
   async comment(actor: Actor, id: string, body: string | null, commentId?: string) {
     const key = commentId ?? timeId()
-    const event = await this.transaction(async tx => {
-      const { doc, path, member } = await this.post(actor, id, tx)
+    const created = await this.transaction(async tx => {
+      const { path, member } = await this.post(actor, id, tx)
       const user = userKey(actor.uid)
       const location = path + '/comments/' + key
       if (commentId) {
@@ -457,16 +457,16 @@ export class FamilyContent extends Firestore {
         if (string(previous, 'author') !== user && !(body === null && member.role === 'admin')) {
           throw new HttpError(403, 'comment author required')
         }
-        return { result: null, writes: [body === null ? this.remove(location)
+        return { result: false, writes: [body === null ? this.remove(location)
           : this.write(location, { ...previous.fields, body: s(body) })] }
       }
       const profile = await this.get('profiles/' + user, tx)
-      return { result: { owner: string(doc, 'author')! }, writes: [
+      return { result: true, writes: [
         this.write(location, { author: s(user), name: s(string(profile, 'name') || '家族'),
           body: s(body!), at: s(now()) }, true),
       ] }
     })
-    if (event) await this.notify(actor, id, 'comment', 'comment-' + key, event.owner).catch(() => {})
+    if (created) await this.notify(actor, id, 'comment', 'comment-' + key).catch(() => {})
   }
 
   async react(actor: Actor, id: string, kind: string, enabled: boolean) {
