@@ -48,6 +48,9 @@ Future<String?> pickMemberAvatar(BuildContext context, String? current) =>
 class _AvatarPicker extends StatelessWidget {
   const _AvatarPicker(this.current);
 
+  static const _personLabel = 'ヒト';
+  static const _animalLabel = '動物';
+
   final String? current;
 
   Widget grid(String type, String label) => GridView.builder(
@@ -95,13 +98,18 @@ class _AvatarPicker extends StatelessWidget {
       appBar: AppBar(
         title: const Text('アイコンを選ぶ'),
         bottom: const TabBar(
+          labelColor: Colors.white,
+          unselectedLabelColor: Color(0xFFFFF4E8),
+          indicatorColor: Colors.white,
           tabs: [
-            Tab(text: '人型'),
-            Tab(text: '動物'),
+            Tab(text: _personLabel),
+            Tab(text: _animalLabel),
           ],
         ),
       ),
-      body: TabBarView(children: [grid('person', '人型'), grid('animal', '動物')]),
+      body: TabBarView(
+        children: [grid('person', _personLabel), grid('animal', _animalLabel)],
+      ),
     ),
   );
 }
