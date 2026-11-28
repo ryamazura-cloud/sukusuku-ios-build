@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:family_share/app/theme.dart';
 import 'package:family_share/features/album/album_api.dart';
 import 'package:family_share/features/album/album_widgets.dart';
+import 'package:family_share/features/album/media_viewer.dart';
 import 'package:family_share/features/album/post_editor.dart';
 import 'package:family_share/features/album/post_screen.dart';
 import 'package:family_share/features/family/family_api.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _PostApi extends AlbumApi {
@@ -41,7 +45,45 @@ class _PostApi extends AlbumApi {
         };
 }
 
+class _SavePhotoApi extends _PostApi {
+  final Uint8List bytes = Uint8List.fromList([1, 2, 3]);
+
+  @override
+  Future<Uint8List> photo(String post, String id) =>
+      Completer<Uint8List>().future;
+
+  @override
+  Future<Uint8List> media(String post, String id) async => bytes;
+}
+
 void main() {
+  testWidgets('download button saves the photo through the platform channel', (
+    tester,
+  ) async {
+    final api = _SavePhotoApi();
+    const channel = MethodChannel('biz.wisemap.family_share/video');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    MethodCall? saved;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      saved = call;
+      return true;
+    });
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaViewer(api, 'post', {'id': 'photo', 'type': 'image/jpeg'}),
+      ),
+    );
+    expect(find.byIcon(Icons.file_download_outlined), findsOneWidget);
+    await tester.tap(find.byTooltip('端末に保存'));
+    await tester.pump();
+    expect(saved?.method, 'save');
+    expect(saved?.arguments, {'bytes': api.bytes, 'video': false});
+    expect(find.text('写真を保存しました。'), findsOneWidget);
+  });
+
   testWidgets('opens the post identified by a notification', (tester) async {
     const postId = '0000000000-9b520f34-b260-48b1-97d8-343d40e44b09';
     final api = _PostApi();

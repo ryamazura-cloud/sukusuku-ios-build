@@ -132,7 +132,10 @@ class _FamilyScreenState extends ConsumerState<FamilyScreen> {
     final currentInvite = invitation;
     final inviteLink = currentInvite == null
         ? null
-        : widget.base.resolve('/invite/${currentInvite.code}').toString();
+        : widget.base
+              .resolve('/invite/${currentInvite.code}')
+              .replace(queryParameters: {'openExternalBrowser': '1'})
+              .toString();
     final role = target;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

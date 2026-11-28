@@ -42,7 +42,7 @@ void main() {
     expect(inviteCode, isNull);
     await tester.enterText(
       find.byType(TextFormField),
-      ' https://example.invalid/invite/$code ',
+      ' https://example.invalid/invite/$code?openExternalBrowser=1 ',
     );
     await tester.tap(find.text('続ける'));
     await tester.pumpAndSettle();

@@ -135,16 +135,29 @@ test('public invitation landing page does not expose the token or album details'
   const landing = await open('/invite/' + code)
   assert.equal(landing.status, 200)
   assert.equal(landing.headers.get('referrer-policy'), 'no-referrer')
-  assert.doesNotMatch(await landing.text(), new RegExp(code))
+  const landingHtml = await landing.text()
+  assert.doesNotMatch(landingHtml, new RegExp(code))
+  assert.match(landingHtml, /招待状/)
+  assert.match(landingHtml, /\/invite-art\/family-collage\.jpg/)
+  assert.match(landingHtml, /\/invite-art\/app-icon\.png/)
   const android = await open('/invite/' + code, 'Mozilla/5.0 (Linux; Android 16) Chrome/141 Safari/537.36')
-  assert.equal(android.status, 302)
-  assert.equal(android.headers.get('location'), 'https://play.google.com/store/apps/details?id=biz.wisemap.family_share')
+  assert.equal(android.status, 200)
+  const androidHtml = await android.text()
+  const playLink = 'https://play.google.com/store/apps/details?id=biz.wisemap.family_share'
+  assert.ok(androidHtml.includes(playLink))
+  assert.match(androidHtml, /すくすくで開く/)
+  assert.doesNotMatch(androidHtml, /Apple Store|TestFlight/)
   assert.equal(android.headers.get('referrer-policy'), 'no-referrer')
   const ios = await open('/invite/' + code, 'Mozilla/5.0 (iPhone) Safari/605.1.15')
   assert.equal(ios.status, 200)
   assert.equal(ios.headers.get('location'), null)
   const iosHtml = await ios.text()
   assert.match(iosHtml, /招待リンクをコピー/)
+  assert.match(iosHtml, /すくすくで開く/)
+  assert.doesNotMatch(iosHtml, /Google Play/)
+  const storePage = await app.fetch(new Request('https://example.invalid/invite/' + code,
+    { headers: { 'User-Agent': 'iPhone' } }), { ...env, IOS_STORE_URL: undefined })
+  assert.match(await storePage.text(), /Apple Storeでインストール/)
   assert.match(iosHtml, /TestFlightでインストール/)
   assert.doesNotMatch(iosHtml, new RegExp(code))
   const iosEmbedded = await open('/invite/' + code, 'Mozilla/5.0 (iPhone) Line/15.1')
@@ -159,7 +172,7 @@ test('public invitation landing page does not expose the token or album details'
   assert.match(helper.headers.get('content-type')!, /application\/javascript/)
   const button = { hidden: true, href: '' }
   const document = { getElementById: (id: string) =>
-    id === 'open-app' ? button : id === 'android-store' ? { href: android.headers.get('location') } : null }
+    id === 'open-app' ? button : id === 'android-store' ? { href: playLink } : null }
   const runHelper = new Function('document', 'location', 'navigator', await helper.text())
   runHelper(document, { href: 'https://example.invalid/invite/' + code }, {})
   let click: (() => Promise<void>) | undefined
@@ -175,6 +188,11 @@ test('public invitation landing page does not expose the token or album details'
   assert.match(status.textContent, /コピーしました/)
   assert.equal(button.hidden, false)
   assert.match(button.href, new RegExp('^intent://example\\.invalid/invite/' + code + '#Intent;scheme=https;package='))
+  const iosButton = { hidden: true, href: '' }
+  runHelper({ getElementById: (id: string) => id === 'open-ios' ? iosButton : null },
+    { href: 'https://example.invalid/invite/' + code + '?openExternalBrowser=1' }, {})
+  assert.equal(iosButton.hidden, false)
+  assert.equal(iosButton.href, 'sukusuku://app/invite/' + code)
   const assetlinks = await (await open('/.well-known/assetlinks.json')).json()
   assert.deepEqual(assetlinks[0].target, {
     namespace: 'android_app', package_name: 'biz.wisemap.family_share', sha256_cert_fingerprints: [cert],

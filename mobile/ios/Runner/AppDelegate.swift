@@ -1,6 +1,7 @@
 import AVKit
 import Flutter
 import ImageIO
+import Photos
 import UIKit
 
 @main
@@ -48,6 +49,10 @@ import UIKit
         result(NSTemporaryDirectory())
         return
       }
+      if call.method == "save" {
+        saveMedia(call.arguments, result: result)
+        return
+      }
       guard call.method == "open" else {
         result(FlutterMethodNotImplemented)
         return
@@ -78,6 +83,34 @@ import UIKit
       let navigation = UINavigationController(rootViewController: screen)
       navigation.modalPresentationStyle = .fullScreen
       presenter.present(navigation, animated: true)
+    }
+  }
+}
+
+private func saveMedia(_ arguments: Any?, result: @escaping FlutterResult) {
+  guard let args = arguments as? [String: Any],
+        let bytes = args["bytes"] as? FlutterStandardTypedData,
+        !bytes.data.isEmpty, bytes.data.count <= 16 * 1024 * 1024
+  else {
+    result(FlutterError(code: "save_failed", message: nil, details: nil))
+    return
+  }
+  let isVideo = args["video"] as? Bool == true
+  PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+    guard status == .authorized || status == .limited else {
+      DispatchQueue.main.async {
+        result(FlutterError(code: "save_permission", message: nil, details: nil))
+      }
+      return
+    }
+    PHPhotoLibrary.shared().performChanges {
+      let request = PHAssetCreationRequest.forAsset()
+      request.addResource(with: isVideo ? .video : .photo, data: bytes.data, options: nil)
+    } completionHandler: { saved, _ in
+      DispatchQueue.main.async {
+        if saved { result(true) }
+        else { result(FlutterError(code: "save_failed", message: nil, details: nil)) }
+      }
     }
   }
 }

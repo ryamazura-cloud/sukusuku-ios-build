@@ -6,6 +6,19 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>家族のアルバムに投稿する写真を撮影します。</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>アルバムから選んだ写真や動画を端末の写真ライブラリに保存します。</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>biz.wisemap.familyShare</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>sukusuku</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>家族のアルバムに投稿する写真と動画を選びます。</string>
 	<key>UIBackgroundModes</key>

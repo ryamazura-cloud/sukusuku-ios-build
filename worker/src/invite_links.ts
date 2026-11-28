@@ -11,6 +11,7 @@ const packageName = 'biz.wisemap.family_share'
 const bundleId = 'biz.wisemap.familyShare'
 
 const playStore = 'https://play.google.com/store/apps/details?id=' + packageName
+const appStore = 'https://apps.apple.com/app/id6839227117'
 
 function distributionUrl(value: string | undefined, platform: 'android' | 'ios') {
   if (!value) return undefined
@@ -31,8 +32,8 @@ function escapeAttribute(value: string) {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
 }
 
-function storeLink(value: string | undefined, label: string) {
-  return value ? '<a class="button" href="' + escapeAttribute(value) + '">' + label + '</a>' : ''
+function storeLink(id: string, value: string, label: string) {
+  return '<a class="button store" id="' + id + '" href="' + escapeAttribute(value) + '">' + label + '</a>'
 }
 
 export function registerInviteLinks(app: Hono<AppEnv>) {
@@ -52,6 +53,7 @@ export function registerInviteLinks(app: Hono<AppEnv>) {
   })
   app.get('/invite-open.js', c => c.body(`
 const button = document.getElementById('open-app');
+const iosButton = document.getElementById('open-ios');
 const copy = document.getElementById('copy-invite');
 const link = new URL(location.href);
 if (copy && navigator.clipboard && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol === 'https:') {
@@ -73,6 +75,10 @@ if (button && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol 
     encodeURIComponent(fallback) + ';end';
   button.hidden = false;
 }
+if (iosButton && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol === 'https:') {
+  iosButton.href = 'sukusuku://app' + link.pathname;
+  iosButton.hidden = false;
+}
 `, 200, { ...privacy, 'Content-Type': 'application/javascript; charset=utf-8' }))
 
   app.get('/invite/:code', c => {
@@ -80,24 +86,47 @@ if (button && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathname) && link.protocol 
     const ua = c.req.header('User-Agent') ?? ''
     const android = /Android/i.test(ua)
     const ios = /iPhone|iPad|iPod/i.test(ua)
-    const embedded = /Line\/|FBAN|FBAV|Instagram|;\s*wv\)|MicroMessenger|TikTok/i.test(ua)
     const androidStore = distributionUrl(c.env.ANDROID_STORE_URL, 'android') ?? playStore
-    const iosStore = distributionUrl(c.env.IOS_STORE_URL, 'ios')
-    // iOS browsers keep the invite visible so installed users can still join manually.
-    if (android && !embedded) {
-      return c.body(null, 302, { ...privacy, Location: androidStore, Vary: 'User-Agent' })
-    }
+    const iosStore = distributionUrl(c.env.IOS_STORE_URL, 'ios') ?? appStore
+    const iosStoreLabel = iosStore.startsWith('https://testflight.apple.com/')
+      ? 'TestFlightでインストール'
+      : 'Apple Storeでインストール'
     c.header('Vary', 'User-Agent')
-    c.header('Content-Security-Policy', "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+    c.header('Content-Security-Policy', "default-src 'none'; img-src 'self'; script-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
     return c.html(`<!doctype html><html lang="ja"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>すくすくへの招待</title><style>body{margin:3rem auto;max-width:32rem;padding:0 1.25rem;font:1rem/1.7 system-ui;background:#f8f2e9;color:#292520}h1{font-size:1.7rem}.button{display:block;box-sizing:border-box;width:100%;border:0;font:inherit;cursor:pointer;margin:.75rem 0;padding:.75rem 1rem;border-radius:1.5rem;background:#794d39;color:white;text-align:center;text-decoration:none;font-weight:600}[hidden]{display:none!important}</style>
-<main><h1>すくすくへの招待</h1><script src="/invite-open.js" defer></script>
-${android ? '<a id="open-app" class="button" hidden>すくすくで開く</a>' : '<p>インストール済みの場合は、届いた招待リンクを長押しして「すくすくで開く」を選べます。開かない場合は、招待リンクをコピーし、アプリの「招待リンクから参加」に貼り付けてください。</p><button id="copy-invite" class="button" type="button" hidden>招待リンクをコピー</button><p id="copy-status" role="status"></p>'}
-${!android ? storeLink(iosStore, iosStore?.startsWith('https://testflight.apple.com/') ? 'TestFlightでインストール' : 'App Storeでインストール') : ''}
-${!ios ? '<a id="android-store" class="button" href="' + escapeAttribute(androidStore) + '">Google Playでインストール</a>' : ''}
-<p>インストール後、メッセージに届いた元の招待リンクをもう一度開いてください。</p>
-<p>インストール済みで開かない場合は、元の招待リンクを長押しして「すくすくで開く」を選んでください。メッセージアプリ内で開いている場合は、リンクをSafariまたはChromeで開くこともできます。</p>
+<title>すくすくへの招待</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#e8d9c5;color:#392920;font:1rem/1.55 system-ui,sans-serif}
+main{max-width:28rem;min-height:100vh;min-height:100svh;margin:auto;padding:24px 24px max(20px,env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;text-align:center}
+.brand{display:flex;align-items:center;justify-content:center;gap:12px;font-size:1.65rem;font-weight:750}
+.brand img{border-radius:12px}
+h1{margin:12px 0 4px;font-size:2rem;letter-spacing:.08em}
+p{margin:0}
+.collage{display:block;width:min(100%,20rem);height:auto;margin:auto 0;box-sizing:content-box;padding:18px 0}
+.actions{width:100%;display:grid;gap:9px}
+.button{display:grid;place-items:center;min-height:48px;padding:8px 14px;border:1px solid #825a46;border-radius:26px;background:#784e3b;color:#fff;font-weight:650;text-decoration:none}
+.store{background:#fcf4e7;color:#624332}
+.copy{border:0;background:none;color:#624332;font:inherit;font-size:.875rem;padding:5px;min-height:32px;text-decoration:underline;cursor:pointer}
+.help,#copy-status{color:#624332;font-size:.75rem}
+#copy-status:empty{display:none}
+a:focus-visible,button:focus-visible{outline:3px solid #51382a;outline-offset:2px}
+[hidden]{display:none!important}
+</style>
+<main>
+<header><div class="brand"><img src="/invite-art/app-icon.png" width="48" height="48" alt="">すくすく</div><h1>招待状</h1><p>家族のアルバムに招待されました。</p></header>
+<img class="collage" src="/invite-art/family-collage.jpg" width="860" height="860" alt="家族の思い出の写真">
+<div class="actions">
+${android ? '<a id="open-app" class="button" hidden>すくすくで開く</a>' : ''}
+${ios ? '<a id="open-ios" class="button" hidden>すくすくで開く</a>' : ''}
+${!android ? storeLink('ios-store', iosStore, iosStoreLabel) : ''}
+${!ios ? storeLink('android-store', androidStore, 'Google Playでインストール') : ''}
+<button id="copy-invite" class="copy" type="button" hidden>招待リンクをコピー</button>
+<p id="copy-status" role="status"></p>
+<p class="help">インストール後は、元の招待リンクをもう一度開いてください。アプリが開かないときは、リンクをコピーしてアプリの「招待リンクから参加」に貼り付けてください。</p>
+</div>
+<script src="/invite-open.js" defer></script>
 </main></html>`, 200, privacy)
   })
 }

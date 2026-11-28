@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:flutter/services.dart';
 
 import 'album_api.dart';
@@ -77,23 +75,27 @@ class _MediaViewerState extends State<MediaViewer> {
     }
   }
 
-  Future<void> export() async {
+  Future<void> save() async {
     setState(() => saving = true);
     try {
       final data = await download();
       if (!mounted) return;
-      final box = context.findRenderObject() as RenderBox?;
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [
-            XFile.fromData(data, mimeType: video ? 'video/mp4' : 'image/jpeg'),
-          ],
-          fileNameOverrides: [video ? 'sukusuku.mp4' : 'sukusuku.jpg'],
-          sharePositionOrigin: box == null
-              ? null
-              : box.localToGlobal(Offset.zero) & box.size,
-        ),
-      );
+      final saved = await playback.invokeMethod<bool>('save', {
+        'bytes': data,
+        'video': video,
+      });
+      if (mounted && saved == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(video ? '動画を保存しました。' : '写真を保存しました。')),
+        );
+      }
+    } on PlatformException catch (failure) {
+      if (!mounted) return;
+      final message = failure.code == 'save_permission'
+          ? '端末の設定ですくすくに写真の追加を許可してください。'
+          : '端末に保存できませんでした。空き容量を確認して再試行してください。';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
     } catch (failure) {
       if (mounted) showFailure(context, failure);
     } finally {
@@ -150,10 +152,15 @@ class _MediaViewerState extends State<MediaViewer> {
         _ => const CircularProgressIndicator(),
       },
     );
-    final share = IconButton(
-      onPressed: saving ? null : export,
-      tooltip: '保存・共有',
-      icon: const Icon(Icons.ios_share),
+    final saveButton = IconButton(
+      onPressed: saving || error != null ? null : save,
+      tooltip: '端末に保存',
+      icon: saving
+          ? const SizedBox.square(
+              dimension: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.file_download_outlined),
     );
     if (widget.inline) {
       return Stack(
@@ -165,14 +172,14 @@ class _MediaViewerState extends State<MediaViewer> {
             child: Material(
               color: Theme.of(context).colorScheme.surfaceContainer,
               shape: const CircleBorder(),
-              child: share,
+              child: saveButton,
             ),
           ),
         ],
       );
     }
     return Scaffold(
-      appBar: AppBar(title: Text(video ? '動画' : '写真'), actions: [share]),
+      appBar: AppBar(title: Text(video ? '動画' : '写真'), actions: [saveButton]),
       body: content,
     );
   }
