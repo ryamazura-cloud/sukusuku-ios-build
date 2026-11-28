@@ -12,16 +12,8 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     var created = 0;
-    String? inviteCode;
-    const code = '0123456789abcdef0123456789abcdef';
     await tester.pumpWidget(
-      MaterialApp(
-        home: WelcomeScreen(
-          onCreateAlbum: () => created++,
-          inviteBase: Uri.https('example.invalid'),
-          onOpenInvite: (value) => inviteCode = value,
-        ),
-      ),
+      MaterialApp(home: WelcomeScreen(onCreateAlbum: () => created++)),
     );
     await tester.pumpAndSettle();
     expect(find.text('すくすく'), findsOneWidget);
@@ -31,22 +23,10 @@ void main() {
     expect(created, 1);
     await tester.tap(find.text('招待リンクから参加'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('家族から届いた招待リンクをコピー'), findsOneWidget);
-    await tester.enterText(
-      find.byType(TextFormField),
-      'https://other.invalid/invite/$code',
-    );
-    await tester.tap(find.text('続ける'));
+    expect(find.textContaining('招待リンクをもう一度開いてください'), findsOneWidget);
+    expect(find.byType(TextFormField), findsNothing);
+    await tester.tap(find.text('閉じる'));
     await tester.pumpAndSettle();
-    expect(find.text('すくすくの招待リンクを入力してください。'), findsOneWidget);
-    expect(inviteCode, isNull);
-    await tester.enterText(
-      find.byType(TextFormField),
-      ' https://example.invalid/invite/$code?openExternalBrowser=1 ',
-    );
-    await tester.tap(find.text('続ける'));
-    await tester.pumpAndSettle();
-    expect(inviteCode, code);
     expect(created, 1);
     expect(find.byType(AlertDialog), findsNothing);
 

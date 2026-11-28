@@ -62,7 +62,7 @@ if (copy && navigator.clipboard && /^\\/invite\\/[a-f0-9]{32}$/.test(link.pathna
     const status = document.getElementById('copy-status');
     try {
       await navigator.clipboard.writeText(link.origin + link.pathname);
-      status.textContent = 'コピーしました。すくすくの「招待リンクから参加」に貼り付けてください。';
+      status.textContent = 'コピーしました。メッセージなどに貼り付け、そのリンクを開いてください。';
     } catch {
       status.textContent = 'コピーできませんでした。メッセージに届いた元の招待リンクを長押ししてコピーしてください。';
     }
@@ -124,7 +124,7 @@ ${!android ? storeLink('ios-store', iosStore, iosStoreLabel) : ''}
 ${!ios ? storeLink('android-store', androidStore, 'Google Playでインストール') : ''}
 <button id="copy-invite" class="copy" type="button" hidden>招待リンクをコピー</button>
 <p id="copy-status" role="status"></p>
-<p class="help">インストール後は、元の招待リンクをもう一度開いてください。アプリが開かないときは、リンクをコピーしてアプリの「招待リンクから参加」に貼り付けてください。</p>
+<p class="help">インストール後は、家族から届いた元の招待リンクをもう一度開いてください。アプリが開かないときは、SafariまたはChromeで開いてから「すくすくで開く」を押してください。</p>
 </div>
 <script src="/invite-open.js" defer></script>
 </main></html>`, 200, privacy)
